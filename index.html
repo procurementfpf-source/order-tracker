@@ -4272,7 +4272,34 @@ function syncBlankCfg(){ return { url:'', token:'', deviceId:'', auto:true, last
    settings and shipping charges as a brand new edit and wipe the real ones
    for every other device. It pushes its own records on the pass straight after. */
 function syncBlankShadow(){
-  return { init:false, rec:{orders:{},containers:{},products:{},pnl:{},meta:{}} };
+  return { init:false, rec:{orders:{},containers:{},products:{},pnl:{},meta:{}},
+           pend:{orders:{},containers:{},products:{},pnl:{},meta:{}} };
+}
+function syncPendMap(type){
+  if(!syncShadow.pend) syncShadow.pend={orders:{},containers:{},products:{},pnl:{},meta:{}};
+  if(!syncShadow.pend[type]) syncShadow.pend[type]={};
+  return syncShadow.pend[type];
+}
+/* The moment a record first LOOKS changed, remember when. That timestamp — not the
+   time it finally uploads — is what settles a conflict. Without this an edit made
+   offline on Tuesday beats one made on another device on Wednesday, purely because
+   it reached the server later. */
+function syncStampEditTimes(){
+  const now=Date.now(); let n=0;
+  SYNC_TYPES.forEach(type=>{
+    const pend=syncPendMap(type);
+    (state[type]||[]).forEach(rec=>{
+      const k=syncKeyOf(type,rec); if(!k) return;
+      const prev=syncShadow.rec[type][k];
+      if(prev && prev.h===syncHash(JSON.stringify(rec))) return;
+      if(pend[k]==null){ pend[k]=now; n++; }
+    });
+  });
+  const mpend=syncPendMap('meta');
+  const mh=syncHash(JSON.stringify(syncMetaRecord()));
+  if(!(syncShadow.rec.meta && syncShadow.rec.meta.h===mh) && mpend.meta==null){ mpend.meta=now; n++; }
+  if(n) saveSyncShadow();
+  return n;
 }
 function syncEmptyDiff(){
   return { orders:[], containers:[], products:[], pnl:[], meta:null,
@@ -4287,6 +4314,7 @@ let syncDirty   = false;
 let syncBusy    = false;
 let syncApplying= false;
 let syncTimer   = null;
+let syncLastPullCount = 0;
 
 function saveSyncCfg(){ try{ localStorage.setItem(SYNC_CFG_KEY, JSON.stringify(syncCfg)); }catch(e){} }
 function saveSyncShadow(){ try{ localStorage.setItem(SYNC_SHADOW_KEY, JSON.stringify(syncShadow)); }catch(e){} }
@@ -4332,14 +4360,26 @@ function syncBuildDiff(){
       seen[k]=1;
       const json=JSON.stringify(rec), h=syncHash(json);
       const prev=syncShadow.rec[type][k];
-      if(!prev || prev.h!==h) out[type].push({id:k, updatedAt:now, json});
+      if(!prev || prev.h!==h){
+        const pend=syncPendMap(type);
+        if(pend[k]==null) pend[k]=now;
+        out[type].push({id:k, updatedAt:pend[k], json});
+      }
     });
     Object.keys(syncShadow.rec[type]||{}).forEach(k=>{
-      if(!seen[k]) out.del[type].push({id:k, updatedAt:now});
+      if(!seen[k]){
+        const pend=syncPendMap(type);
+        if(pend[k]==null) pend[k]=now;
+        out.del[type].push({id:k, updatedAt:pend[k]});
+      }
     });
   });
   const mjson=JSON.stringify(syncMetaRecord()), mh=syncHash(mjson);
-  if(!syncShadow.rec.meta || syncShadow.rec.meta.h!==mh) out.meta={id:'meta', updatedAt:now, json:mjson};
+  if(!syncShadow.rec.meta || syncShadow.rec.meta.h!==mh){
+    const mpend=syncPendMap('meta');
+    if(mpend.meta==null) mpend.meta=now;
+    out.meta={id:'meta', updatedAt:mpend.meta, json:mjson};
+  }
   return out;
 }
 function syncPendingCount(d){
@@ -4408,13 +4448,23 @@ async function syncRun(manual, opts){
 
     /* Push accepted — the shadow now matches what we sent. */
     SYNC_TYPES.forEach(type=>{
-      diff[type].forEach(r=>{ syncShadow.rec[type][r.id]={h:syncHash(r.json), u:r.updatedAt}; });
-      diff.del[type].forEach(r=>{ delete syncShadow.rec[type][r.id]; });
+      const pend=syncPendMap(type);
+      diff[type].forEach(r=>{ syncShadow.rec[type][r.id]={h:syncHash(r.json), u:r.updatedAt}; delete pend[r.id]; });
+      diff.del[type].forEach(r=>{ delete syncShadow.rec[type][r.id]; delete pend[r.id]; });
     });
-    if(diff.meta) syncShadow.rec.meta={h:syncHash(diff.meta.json), u:diff.meta.updatedAt};
+    if(diff.meta){ syncShadow.rec.meta={h:syncHash(diff.meta.json), u:diff.meta.updatedAt}; delete syncPendMap('meta').meta; }
 
     const applied=syncApplyRemote(data.changed||{});
-    syncCfg.lastPull=data.now||Date.now();
+    /* The marker is a small server-side counter. It must never be set from a clock:
+       one millisecond value here and the device silently ignores every future row,
+       while still reporting a healthy sync. That is exactly how a device goes deaf. */
+    const mark=Number(data.now);
+    if(!isFinite(mark) || mark<0 || mark>1e12){
+      throw new Error('Server sent a bad sync marker ('+data.now+') — update Code.gs and redeploy');
+    }
+    syncCfg.lastPull=mark;
+    syncLastPullCount=Object.keys(data.changed||{}).reduce(function(a,k){
+      const v=(data.changed||{})[k]; return a+(Array.isArray(v)?v.length:(v?1:0)); },0);
     syncCfg.lastOkAt=Date.now();
     saveSyncCfg(); saveSyncShadow();
 
@@ -4449,7 +4499,12 @@ function syncSchedule(){
   syncDirty=true; renderSyncPill();
   if(!syncConfigured() || !syncCfg.auto) return;
   clearTimeout(syncTimer);
-  syncTimer=setTimeout(()=>syncNow(false), SYNC_DEBOUNCE_MS);
+  syncTimer=setTimeout(()=>{
+    /* Offline, syncNow returns before it ever builds a diff, so nothing would record
+       WHEN these edits happened. Stamp them here instead. */
+    if(!navigator.onLine){ try{ syncStampEditTimes(); }catch(e){} return; }
+    syncNow(false);
+  }, SYNC_DEBOUNCE_MS);
 }
 
 /* ---------- status pill in the top bar ---------- */
@@ -4515,6 +4570,7 @@ function viewSync(){
       <button class="btn primary" onclick="syncSaveSettings()">Save settings</button>
       <button class="btn" onclick="syncNow(true)">Sync now</button>
       <button class="btn" onclick="syncResend()">Re-upload everything</button>
+      <button class="btn" onclick="syncResetDevice()">Reset this device's sync</button>
     </div>
   </div></div>
 
@@ -4524,11 +4580,23 @@ function viewSync(){
       On this device: ${counts.map(c=>'<b>'+c.n+'</b> '+c.t).join(' · ')}
       ${cfgd? ' · <b>'+pending+'</b> waiting to upload' : ''}
     </div>
+    <div class="minor mono" style="font-size:11.5px;margin-top:14px;line-height:1.8;
+         border-top:1px solid var(--line);padding-top:12px">
+      Device ID <b>${esc(syncCfg.deviceId||'—')}</b> &nbsp;·&nbsp;
+      read up to marker <b>${syncCfg.lastPull||0}</b> &nbsp;·&nbsp;
+      last pull brought <b>${syncLastPullCount}</b> record${syncLastPullCount===1?'':'s'}<br>
+      <span style="opacity:.75">The marker is a small counter, normally in the hundreds or low thousands.
+      If it shows a huge number, this device has lost its place and will quietly ignore everything —
+      use <b>Reset this device's sync</b>.</span>
+    </div>
     <div class="minor" style="font-size:11.5px;margin-top:10px;line-height:1.6">
       <b>If the same record is edited on two devices</b>, the one saved last wins and the other version is replaced.
       Different records never clash. Deleting a record here deletes it everywhere on the next sync.<br>
       <b>Re-upload everything</b> pushes every record from this device up again, overwriting the Sheet's copy —
-      use it if a device has fallen out of step, and run it from the device with the data you trust.
+      run it only from the device whose data you trust.<br>
+      <b>Reset this device's sync</b> is the opposite: this device throws away its own place in the queue
+      and takes the sheet's version of everything. That is the one to use when a device has stopped
+      receiving other devices' changes.
     </div>
   </div></div>`;
 }
@@ -4562,6 +4630,23 @@ function syncResend(){
   syncNow(true, {forcePush:true});
 }
 
+function syncResetDevice(){
+  if(!syncConfigured()){ toast('Set up sync first'); return; }
+  const pending=syncPendingCount();
+  let msg='Reset this device\'s sync?\n\nThis device gets a new identity and forgets how far it had read, '+
+          'so the next sync pulls the whole sheet down fresh.\n\nNothing on the sheet or on your other devices is changed.';
+  if(pending>0){
+    msg='WARNING — this device has '+pending+' change'+(pending===1?'':'s')+' that has not been uploaded yet.\n\n'+
+        'Resetting DISCARDS '+(pending===1?'it':'them')+' and takes the sheet\'s version instead.\n\n'+
+        'Back up first if those edits matter. Continue?';
+  }
+  if(!confirm(msg)) return;
+  syncCfg.deviceId=''; syncCfg.lastPull=0; saveSyncCfg(); syncDeviceId();
+  syncShadow=syncBlankShadow(); saveSyncShadow();
+  toast('Sync reset — pulling everything down');
+  syncNow(true);
+}
+
 /* ---------- wiring ---------- */
 (function(){
   const _save=save;
@@ -4570,6 +4655,10 @@ function syncResend(){
 window.addEventListener('online',  ()=>{ syncSetState('idle',''); syncNow(false); });
 window.addEventListener('offline', ()=>syncSetState('offline','No connection — changes are held on this device'));
 document.addEventListener('visibilitychange',()=>{ if(!document.hidden) syncNow(false); });
+/* iOS does not reliably fire visibilitychange on a tab restored from the freezer,
+   so catch the app waking up every other way it can. */
+window.addEventListener('pageshow', ()=>syncNow(false));
+window.addEventListener('focus',    ()=>syncNow(false));
 setInterval(()=>{ if(syncConfigured() && syncCfg.auto && !document.hidden) syncNow(false); }, SYNC_INTERVAL_MS);
 setInterval(renderSyncPill, 60000);
 
