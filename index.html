@@ -329,8 +329,9 @@ td .mono{font-size:12.5px}
 .cc-cell .k{font-size:9.5px;text-transform:uppercase;letter-spacing:.6px;color:var(--txt-3);font-weight:600}
 .cc-cell .v{font-size:12.5px;margin-top:2px;white-space:nowrap}
 .cc-cell .v.strong{color:var(--txt);font-weight:600}
+.ccard{--cc-tail-w:266px}
 .cc-tail{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex:0 0 auto;
-  padding-left:12px;width:266px}
+  padding-left:12px;width:var(--cc-tail-w)}
 .cc-badge-slot{width:78px;flex:0 0 auto;display:flex;justify-content:flex-end}
 .cc-menu-wrap{position:relative}
 .cc-menu-btn{padding:5px 9px;line-height:1}
@@ -364,12 +365,15 @@ td .mono{font-size:12.5px}
   font-size:10.5px;color:var(--txt-3);display:flex;align-items:center;gap:8px;flex-wrap:wrap;line-height:1.35}
 /* Factory reads as a plain bold label — no pill, no colour, it just needs to be findable. */
 .cc-fact{font-size:11px;font-weight:700;color:var(--txt);letter-spacing:.1px}
-/* Discharge terminal sits hard right, balancing the factory name on the left. */
-.cc-term{margin-left:auto}
+/* Discharge terminal is pushed right, but stops short by exactly the width of the
+   action tail above it — so it lands under the transhipment column rather than out
+   under the buttons. One variable keeps the two in step if either ever changes. */
+.cc-term{margin-left:auto;margin-right:var(--cc-tail-w)}
 /* Vessel not yet confirmed — head matches the meta strip beneath it. */
 .ccard.cc-prov .ccard-head{background:var(--panel-2)}
 .ccard.cc-prov .ccard-head:hover{background:var(--panel-2)}
-@media (max-width:820px){ .cc-term{margin-left:0} }
+/* Below this the tail collapses to its natural width, so the offset would be wrong. */
+@media (max-width:820px){ .ccard{--cc-tail-w:0px} .cc-term{margin-left:0} }
 /* Total sits in the Qty shipped column, plain weight — it is a sum, not a heading. */
 .cc-total td{border-top:1px solid var(--line);background:none;font-weight:400;color:var(--txt-2)}
 .cc-sep{color:var(--line)}
@@ -4070,6 +4074,8 @@ function bulkCurrent(key){
   const vals=[...selectedContainers].map(id=>{
     const c=container(id); if(!c) return '';
     if(key==='shipType') return c.transhipment? 'transhipment':'direct';
+    /* A boolean would collapse to '' below and read as "no value" rather than "not final". */
+    if(key==='finalVessel') return c.finalVessel? 'yes':'no';
     const v=c[key];
     return (v==null||v===false)? '' : String(v);
   });
@@ -4125,7 +4131,7 @@ function bulkSelectionSummary(){
 function bulkClearTicks(){
   BULK_KEYS.forEach(k=>{ const chk=document.getElementById('bulk_chk_'+k); if(chk){ chk.checked=false; bulkToggle(k); } });
 }
-const BULK_KEYS=['vessel','line','loadDate','pol','containerType','etd','eta','shipType','tsEta','tsEtd','tsVessel'];
+const BULK_KEYS=['vessel','line','loadDate','pol','containerType','etd','eta','terminal','finalVessel','shipType','tsEta','tsEtd','tsVessel'];
 function openBulkShipModal(){
   if(selectedContainers.size===0){ toast('Select at least one container'); return; }
   const n=selectedContainers.size;
@@ -4141,6 +4147,8 @@ function openBulkShipModal(){
       ${bulkFieldSelect('containerType','Container type',[['','— Select —'],['40HQ','40HQ'],['40NOR','40NOR']])}
       ${bulkField('etd','ETD','date')}
       ${bulkField('eta','ETA','date')}
+      ${bulkFieldSelect('terminal','Discharge terminal',[['','— Select —'],...TERMINALS.map(t=>[t,t])])}
+      ${bulkFieldSelect('finalVessel','Vessel confirmed',[['yes','Final vessel'],['no','Not final — card shows blue']])}
       ${bulkFieldSelect('shipType','Sailing type',[['direct','Direct sailing'],['transhipment','Transhipment']])}
       ${bulkField('tsEta','ETA TS port','date')}
       ${bulkField('tsEtd','ETD TS port','date')}
@@ -4178,6 +4186,8 @@ function applyBulkShip(){
     if('containerType' in patch) c.containerType=patch.containerType;
     if('etd' in patch) c.etd=patch.etd;
     if('eta' in patch) c.eta=patch.eta;
+    if('terminal' in patch) c.terminal=patch.terminal;
+    if('finalVessel' in patch) c.finalVessel = patch.finalVessel==='yes';
     if('shipType' in patch){
       c.transhipment = patch.shipType==='transhipment';
       if(!c.transhipment && !('tsEta' in patch) && !('tsEtd' in patch) && !('tsVessel' in patch)){
