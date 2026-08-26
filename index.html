@@ -364,6 +364,12 @@ td .mono{font-size:12.5px}
   font-size:10.5px;color:var(--txt-3);display:flex;align-items:center;gap:8px;flex-wrap:wrap;line-height:1.35}
 /* Factory reads as a plain bold label — no pill, no colour, it just needs to be findable. */
 .cc-fact{font-size:11px;font-weight:700;color:var(--txt);letter-spacing:.1px}
+/* Discharge terminal sits hard right, balancing the factory name on the left. */
+.cc-term{margin-left:auto}
+/* Vessel not yet confirmed — head matches the meta strip beneath it. */
+.ccard.cc-prov .ccard-head{background:var(--panel-2)}
+.ccard.cc-prov .ccard-head:hover{background:var(--panel-2)}
+@media (max-width:820px){ .cc-term{margin-left:0} }
 /* Total sits in the Qty shipped column, plain weight — it is a sum, not a heading. */
 .cc-total td{border-top:1px solid var(--line);background:none;font-weight:400;color:var(--txt-2)}
 .cc-sep{color:var(--line)}
@@ -1514,6 +1520,40 @@ function ccMenu(id, ev){
 }
 document.addEventListener('click', e=>{ if(!e.target.closest('.cc-menu-wrap')) ccMenuClose(); });
 document.addEventListener('keydown', e=>{ if(e.key==='Escape') ccMenuClose(); });
+/* Discharge terminals. Kept as a list so adding a fourth is a one-line change. */
+const TERMINALS = ['DGT','Pier 1','MPT'];
+
+/* One-off tidy of records made before these two fields existed.
+   - Terminal used to be typed into the free-text comment, so an exact match on a
+     known terminal is moved across and the comment cleared. Anything else is left
+     alone — it is a real comment.
+   - Existing containers are marked final so nothing already on the water suddenly
+     turns blue. New ones start unticked, see openPackModal. */
+function migrateContainerFields(){
+  let n=0;
+  (state.containers||[]).forEach(c=>{
+    if(c.finalVessel===undefined){ c.finalVessel=true; n++; }
+    if(c.terminal===undefined){
+      const hit=TERMINALS.find(t=>t.toLowerCase()===String(c.comment||'').trim().toLowerCase());
+      if(hit){ c.terminal=hit; c.comment=''; } else { c.terminal=''; }
+      n++;
+    }
+  });
+  if(n) save();
+}
+
+/* Earliest ETD across every container carrying this order — the day its stock
+   actually started moving. Later containers on the same order do not change it. */
+function orderActualEtd(o){
+  let best=null;
+  (state.containers||[]).forEach(c=>{
+    if(!c.etd) return;
+    if(!(c.lines||[]).some(l=>l.orderId===o.id)) return;
+    if(!best || c.etd<best) best=c.etd;
+  });
+  return best;
+}
+
 function containerCard(c){
   const st=containerStats(c); const exp=st.expDeliv; const open=expandedContainers.has(c.id);
   const tDays=transitDays(c);
@@ -1528,7 +1568,13 @@ function containerCard(c){
     .filter(Boolean).join(' <span class="cc-sep">·</span> ');
   if(route) metaBits.push(`<span>${route}</span>`);
   if(c.comment) metaBits.push(`<span title="${esc(c.comment)}" style="max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(c.comment)}</span>`);
-  return `<div class="panel ccard ${open?'open':''}" data-cc="${c.id}">
+  /* Terminal is pushed to the far right of the strip — same weight as the factory
+     name on the left, so the two read as a pair: where it came from, where it lands. */
+  if(c.terminal) metaBits.push(`<span class="cc-fact cc-term" title="Discharge terminal">${esc(c.terminal)}</span>`);
+  /* Not-yet-final vessel: the head takes the meta strip's colour so the whole card
+     reads as one provisional block until the booking is confirmed. */
+  const prov = !c.finalVessel && !deliv;
+  return `<div class="panel ccard ${open?'open':''} ${prov?'cc-prov':''}" data-cc="${c.id}">
     <div class="panel-head ccard-head" onclick="toggleContainer('${c.id}')">
       <input type="checkbox" class="no-print" title="Select for bulk edit" onclick="event.stopPropagation();toggleContainerSelect('${c.id}')" ${selectedContainers.has(c.id)?'checked':''} style="width:16px;height:16px;flex:0 0 auto">
       <button class="caret" title="Show contents" onclick="event.stopPropagation();toggleContainer('${c.id}')"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="m9 18 6-6-6-6"/></svg></button>
@@ -1765,35 +1811,30 @@ function exportBuyer(){
   if(sel) rows=rows.filter(r=>r.o.period===sel);
   rows.sort((a,b)=> String(a.o.factory||'~').localeCompare(String(b.o.factory||'~')) || (a.o.period||'').localeCompare(b.o.period||'') || String(a.o.code).localeCompare(String(b.o.code)));
   if(!rows.length){ toast('Nothing to export for '+(sel||'this month')); return; }
-  const H=['Factory','Month','Code','Profile','Description','Ordered','Shipped','O/S','Planned ETA','Exp delivery','Late days','Status','Comment'];
+  const H=['Factory','Month','Code','Profile','Description','Ordered','Shipped','O/S','Planned ETD','Actual ETD','Planned ETA','Exp delivery','Late days','Status','Comment'];
   const aoa=[H.map(h=>xcell(h,5))];
   rows.forEach(({o,s,st})=>{ const late=buyerLate(o); const exp=buyerExpDeliv(o);
     aoa.push([ xcell(o.factory||''),xcell(o.period||''),xcell(o.code||''),xcell(o.profile||''),xcell(o.description||''),
-      xcell(o.orderQty,2),xcell(s.packed,2),xcell(s.outstanding,2), o.plannedEta?xdate(o.plannedEta):xcell(''), exp?xdate(exp):xcell(''), late!=null?xcell(late,2):xcell(''), xcell(st), xcell(o.comment||'') ]); });
-  downloadBytes(makeXlsx('Buyer Report', aoa, [13,11,11,10,34,9,9,8,12,12,9,13,30]), 'buyer-report-'+(filters.buyer.month?filters.buyer.month.replace(/\s+/g,'-'):todayISO())+'.xlsx');
+      xcell(o.orderQty,2),xcell(s.packed,2),xcell(s.outstanding,2),
+      o.plannedEtd?xdate(o.plannedEtd):xcell(''), orderActualEtd(o)?xdate(orderActualEtd(o)):xcell(''),
+      o.plannedEta?xdate(o.plannedEta):xcell(''), exp?xdate(exp):xcell(''), late!=null?xcell(late,2):xcell(''), xcell(st), xcell(o.comment||'') ]); });
+  downloadBytes(makeXlsx('Buyer Report', aoa, [13,11,11,10,34,9,9,8,12,12,12,12,9,13,30]), 'buyer-report-'+(filters.buyer.month?filters.buyer.month.replace(/\s+/g,'-'):todayISO())+'.xlsx');
   toast('Excel file downloaded');
 }
 function exportArrivals(){
-  const base = state.settings.weekStart?new Date(state.settings.weekStart):new Date();
-  const start=new Date(base.getFullYear(), base.getMonth(), 1);
-  const months=[]; for(let i=0;i<6;i++){ const d=new Date(start); d.setMonth(d.getMonth()+i); months.push(d); }
-  const mKeys=months.map(monthKey);
-  const rows=state.orders.map(o=>({o,s:orderStats(o)})).filter(r=>r.s.outstanding>0)
-    .sort((a,b)=>(a.o.period||'').localeCompare(b.o.period||''));
+  const {months,rows}=arrivalsRows();
   if(!rows.length){ toast('Nothing outstanding to export'); return; }
-  function buckets(o){ const b=new Array(6).fill(0); let noEta=0;
-    state.containers.forEach(c=>{ if(c.status!=='On Water') return; (c.lines||[]).forEach(l=>{ if(l.orderId!==o.id) return; const e=expDelivOf(c);
-      if(!e){ noEta+=l.qty; return; } const idx=mKeys.indexOf(monthKey(e)); if(idx>=0) b[idx]+=l.qty; else noEta+=l.qty; }); });
-    const prod=orderStats(o).inProduction; if(prod>0){ const md=orderMonthDate(o); const idx=md?mKeys.indexOf(monthKey(md)):-1; if(idx>=0) b[idx]+=prod; else noEta+=prod; }
-    return {b,noEta}; }
-  const H=['Month','Factory','Code','Profile','Description','O/S','Status',...months.map(m=>monthLabel(m)),'No ETA'];
+  const H=['Code','Factory','Profile','Description','O/S','Status',...months.map(m=>monthLabel(m)),'In production','No ETA','Orders'];
   const aoa=[H.map(h=>xcell(h,5))];
-  const tot=new Array(6).fill(0); let tNo=0,tOS=0;
-  rows.forEach(({o,s})=>{ const {b,noEta}=buckets(o); b.forEach((x,i)=>tot[i]+=x); tNo+=noEta; tOS+=s.outstanding;
-    aoa.push([ xcell(o.period||''),xcell(o.factory||''),xcell(o.code||''),xcell(o.profile||''),xcell(o.description||''),
-      xcell(s.outstanding,2),xcell(orderStatus(o)),...b.map(x=>xcell(x,2)),xcell(noEta,2) ]); });
-  aoa.push([ xcell('Total',1),xcell('',1),xcell('',1),xcell('',1),xcell('',1),xcell(tOS,3),xcell('',1),...tot.map(x=>xcell(x,3)),xcell(tNo,3) ]);
-  downloadBytes(makeXlsx('Arrivals by month', aoa, [12,13,11,10,30,9,13,...months.map(()=>10),10]), 'arrivals-by-month-'+todayISO()+'.xlsx');
+  const tot=new Array(months.length).fill(0); let tNo=0,tOS=0,tProd=0;
+  rows.forEach(g=>{
+    g.b.forEach((x,i)=>tot[i]+=x); tNo+=g.noEta; tOS+=g.outstanding; tProd+=g.inProd;
+    aoa.push([ xcell(g.code||''),xcell(g.factory||''),xcell(g.profile||''),xcell(g.description||''),
+      xcell(g.outstanding,2),xcell(g.status),...g.b.map(x=>xcell(x,2)),xcell(g.inProd,2),xcell(g.noEta,2),xcell(g.note||'') ]);
+  });
+  aoa.push([ xcell('Total',1),xcell('',1),xcell('',1),xcell('',1),xcell(tOS,3),xcell('',1),
+    ...tot.map(x=>xcell(x,3)),xcell(tProd,3),xcell(tNo,3),xcell('',1) ]);
+  downloadBytes(makeXlsx('Arrivals by month', aoa, [12,14,10,30,9,13,...months.map(()=>10),13,10,34]), 'arrivals-by-month-'+todayISO()+'.xlsx');
   toast('Excel file downloaded');
 }
 function exportWarehouse(){
@@ -1813,32 +1854,81 @@ function exportWarehouse(){
 }
 
 /* ---------- ARRIVALS BY MONTH ---------- */
-function viewArrivals(){
+
+/* ---------- ARRIVALS BY MONTH ----------
+   One row per CODE, not per order. A code ordered in July, August and September
+   used to spread across three rows, which made "how much of 1-274 lands in
+   October" a mental sum. Now the quantities are combined and the order months
+   that fed them are spelled out in the Orders column instead. */
+function arrivalsMonths(){
   const base = state.settings.weekStart?new Date(state.settings.weekStart):new Date();
   const start=new Date(base.getFullYear(), base.getMonth(), 1);
   const months=[]; for(let i=0;i<6;i++){ const d=new Date(start); d.setMonth(d.getMonth()+i); months.push(d); }
-  const mKeys=months.map(monthKey);
-  // rows: orders with outstanding>0
-  const rows=state.orders.map(o=>({o,s:orderStats(o)})).filter(r=>r.s.outstanding>0);
-  function buckets(o){
-    const b=new Array(6).fill(0); let noEta=0;
-    // on-water qty by container exp-deliv month
-    state.containers.forEach(c=>{ if(c.status!=='On Water') return;
-      (c.lines||[]).forEach(l=>{ if(l.orderId!==o.id) return; const e=expDelivOf(c);
-        if(!e){ noEta+=l.qty; return; } const k=monthKey(e); const idx=mKeys.indexOf(k);
-        if(idx>=0) b[idx]+=l.qty; else noEta+=l.qty; });
-    });
-    // in-production qty -> order's own month (no ETA known)
-    const prod=orderStats(o).inProduction;
-    if(prod>0){ const md=orderMonthDate(o); const k=md?monthKey(md):null; const idx=k?mKeys.indexOf(k):-1;
-      if(idx>=0) b[idx]+=prod; else noEta+=prod; }
-    return {b,noEta};
-  }
-  rows.sort((a,b)=>(a.o.period||'').localeCompare(b.o.period||''));
-  const colTot=new Array(6).fill(0); let totNo=0;
-  rows.forEach(({o})=>{ const {b,noEta}=buckets(o); b.forEach((x,i)=>colTot[i]+=x); totNo+=noEta; });
+  return months;
+}
+function orderBuckets(o, mKeys){
+  const b=new Array(mKeys.length).fill(0); let noEta=0;
+  (state.containers||[]).forEach(c=>{ if(c.status!=='On Water') return;
+    (c.lines||[]).forEach(l=>{ if(l.orderId!==o.id) return; const e=expDelivOf(c);
+      if(!e){ noEta+=l.qty; return; }
+      const idx=mKeys.indexOf(monthKey(e)); if(idx>=0) b[idx]+=l.qty; else noEta+=l.qty; });
+  });
+  /* In production is NOT guessed into an arrival month any more. It has no ETA by
+     definition, so putting it under the order month mixed "arriving" with "not yet
+     shipped" in the same figure. It gets its own column instead, and No ETA now
+     means exactly one thing: on the water with no expected-delivery date. */
+  const inProd=orderStats(o).inProduction;
+  return {b, noEta, inProd:inProd>0?inProd:0};
+}
+/* "July 2026" -> "Jul". Falls back to whatever the period string says. */
+function shortPeriod(o){
+  if(o.periodISO){ const d=new Date(o.periodISO+'-01T00:00:00');
+    if(!isNaN(d)) return d.toLocaleString('en',{month:'short'}); }
+  return (o.period||'').split(' ')[0].slice(0,3) || '?';
+}
+function arrivalsRows(){
+  const months=arrivalsMonths(); const mKeys=months.map(monthKey);
+  const groups=new Map();
+  state.orders.map(o=>({o,s:orderStats(o)})).filter(r=>r.s.outstanding>0).forEach(({o,s})=>{
+    const key=String(o.code||'?');
+    let g=groups.get(key);
+    if(!g){ g={code:key, profile:o.profile||'', description:o.description||'',
+               factories:new Set(), statuses:new Set(), orders:[],
+               outstanding:0, b:new Array(mKeys.length).fill(0), noEta:0, inProd:0}; groups.set(key,g); }
+    if(o.factory) g.factories.add(o.factory);
+    g.statuses.add(orderStatus(o));
+    g.outstanding += s.outstanding;
+    if(!g.profile && o.profile) g.profile=o.profile;
+    if(!g.description && o.description) g.description=o.description;
+    const {b,noEta,inProd}=orderBuckets(o,mKeys);
+    b.forEach((x,i)=>g.b[i]+=x); g.noEta+=noEta; g.inProd+=inProd;
+    g.orders.push({o, outstanding:s.outstanding, inProd, sort:o.periodISO||o.period||''});
+  });
+  const rows=[...groups.values()];
+  rows.forEach(g=>{
+    g.orders.sort((a,b)=>String(a.sort).localeCompare(String(b.sort)));
+    /* The Orders column: which order months make up this row, and how much of each is
+       still in production — "Jul 200 · Aug 300 (100 in production) · Sep 100 in production". */
+    g.note=g.orders.map(x=>{
+      const m=shortPeriod(x.o);
+      if(!x.inProd) return m+' '+nf(x.outstanding);
+      if(x.inProd>=x.outstanding) return m+' '+nf(x.outstanding)+' in production';
+      return m+' '+nf(x.outstanding)+' ('+nf(x.inProd)+' in production)';
+    }).join(' · ');
+    g.factory=[...g.factories].sort().join(', ');
+    g.status=g.statuses.size===1?[...g.statuses][0]:'Mixed';
+  });
+  rows.sort((a,b)=>String(a.code).localeCompare(String(b.code),undefined,{numeric:true}));
+  return {months,mKeys,rows};
+}
+
+function viewArrivals(){
+  const {months,rows}=arrivalsRows();
+  const nCols=months.length;
+  const colTot=new Array(nCols).fill(0); let totNo=0, totOS=0, totProd=0;
+  rows.forEach(g=>{ g.b.forEach((x,i)=>colTot[i]+=x); totNo+=g.noEta; totOS+=g.outstanding; totProd+=g.inProd; });
   return `
-  <div class="print-head"><h1>Outstanding Orders — arrival by month</h1><p>On-water qty by expected-delivery month · in-production by order month</p></div>
+  <div class="print-head"><h1>Outstanding Orders — arrival by month</h1><p>Combined by code · on-water qty by expected-delivery month · in-production shown separately</p></div>
   <div class="toolbar no-print">
     <div style="font-size:13px;color:var(--txt-2)">Window from
       <input type="date" value="${(state.settings.weekStart?new Date(state.settings.weekStart):new Date()).toISOString().slice(0,10)}"
@@ -1846,19 +1936,24 @@ function viewArrivals(){
         style="margin-left:8px;padding:7px 10px;border-radius:8px;border:1px solid var(--line);background:var(--panel);color:var(--txt)"></div>
     <div style="flex:1"></div>
     <button class="btn" onclick="exportArrivals()"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6z"/><path d="M14 2v6h6"/><path d="M9 13l2 3 2-3 2 3" stroke-linecap="round"/></svg> Export to Excel</button>
-    <span class="minor" style="font-size:12.5px">Rolling six months. Stock with no ETA, or arriving outside the window, lands in “No ETA”.</span>
+    <span class="minor" style="font-size:12.5px">One row per code. Rolling six months. Not yet packed sits in &ldquo;In production&rdquo;; packed but with no expected date, or arriving outside the window, lands in &ldquo;No ETA&rdquo;.</span>
   </div>
   <div class="panel"><div class="tbl-wrap matrix">
-    ${rows.length?`<table><thead><tr><th>Month</th><th>Factory</th><th>Code</th><th>Profile</th><th class="num">O/S</th><th>Status</th>
-      ${months.map(m=>`<th class="num month-col">${monthLabel(m)}</th>`).join('')}<th class="num">No ETA</th></tr></thead>
-    <tbody>${rows.map(({o,s})=>{ const {b,noEta}=buckets(o); const st=orderStatus(o); return `<tr class="clickable" onclick="openOrderDetail('${o.id}')">
-      <td>${esc(o.period)}</td><td class="minor">${esc(o.factory||'—')}</td><td class="code-cell mono">${esc(o.code)}</td>
-      <td>${esc(o.profile||'—')}</td><td class="num"><b>${nf(s.outstanding)}</b></td>
-      <td><span class="badge-st ${statusClass(st)}">${st}</span></td>
-      ${b.map(x=>`<td class="num ${x?'':'zero'}">${x?nf(x):'·'}</td>`).join('')}
-      <td class="num ${noEta?'':'zero'}">${noEta?nf(noEta):'·'}</td></tr>`;}).join('')}
-      <tr class="group-row"><td colspan="4">Total</td><td class="num">${nf(rows.reduce((a,r)=>a+r.s.outstanding,0))}</td><td></td>
-        ${colTot.map(x=>`<td class="num">${x?nf(x):'·'}</td>`).join('')}<td class="num">${totNo?nf(totNo):'·'}</td></tr>
+    ${rows.length?`<table><thead><tr><th>Code</th><th>Factory</th><th>Profile</th><th>Description</th><th class="num">O/S</th><th>Status</th>
+      ${months.map(m=>`<th class="num month-col">${monthLabel(m)}</th>`).join('')}<th class="num">In production</th><th class="num">No ETA</th><th>Orders</th></tr></thead>
+    <tbody>${rows.map(g=>{ const one=g.orders.length===1?g.orders[0].o.id:null;
+      return `<tr class="${one?'clickable':''}" ${one?`onclick="openOrderDetail('${one}')"`:''}>
+      <td class="code-cell mono">${esc(g.code)}</td><td class="minor">${esc(g.factory||'—')}</td>
+      <td>${esc(g.profile||'—')}</td>
+      <td class="desc-cell" title="${esc(g.description||'')}">${esc(g.description||'')}</td>
+      <td class="num"><b>${nf(g.outstanding)}</b></td>
+      <td>${g.status==='Mixed'?`<span class="badge-st st-grey" title="${esc([...g.statuses].join(', '))}">Mixed</span>`:`<span class="badge-st ${statusClass(g.status)}">${g.status}</span>`}</td>
+      ${g.b.map(x=>`<td class="num ${x?'':'zero'}">${x?nf(x):'·'}</td>`).join('')}
+      <td class="num ${g.inProd?'':'zero'}" title="Ordered but not yet packed — no ETA exists yet">${g.inProd?nf(g.inProd):'·'}</td>
+      <td class="num ${g.noEta?'':'zero'}">${g.noEta?nf(g.noEta):'·'}</td>
+      <td class="minor mono" style="white-space:nowrap;font-size:11.5px">${esc(g.note)}</td></tr>`;}).join('')}
+      <tr class="group-row"><td colspan="4">Total — ${rows.length} code${rows.length===1?'':'s'}</td><td class="num">${nf(totOS)}</td><td></td>
+        ${colTot.map(x=>`<td class="num">${x?nf(x):'·'}</td>`).join('')}<td class="num">${totProd?nf(totProd):'·'}</td><td class="num">${totNo?nf(totNo):'·'}</td><td></td></tr>
       </tbody></table>`
     : emptyBlock('Nothing outstanding','done','Add orders and pack containers to populate the arrivals matrix.')}
   </div></div>`;
@@ -2734,15 +2829,19 @@ function viewBuyer(){
     </div>
     <div class="tbl-wrap">
     ${any?`<table class="buyer-tbl"><thead><tr><th>Code</th><th>Profile</th><th>Description</th>
-      <th class="num">Ordered</th><th class="num">Shipped</th><th class="num">O/S</th><th>Planned ETA</th><th>Exp. delivery</th><th class="num">Late</th><th>Status</th><th>Comment</th></tr></thead>
+      <th class="num">Ordered</th><th class="num">Shipped</th><th class="num">O/S</th>
+      <th>Planned ETD</th><th>Actual ETD</th><th>Planned ETA</th><th>Exp. delivery</th><th class="num">Late</th><th>Status</th><th>Comment</th></tr></thead>
     <tbody>${keys.map(k=>{ const list=groups[k].sort((a,b)=>(a.o.period||'').localeCompare(b.o.period||'')||String(a.o.code).localeCompare(String(b.o.code)));
-      return `<tr class="group-row"><td colspan="11">${esc(k)} — ${list.length} line${list.length===1?'':'s'}</td></tr>`+
+      return `<tr class="group-row"><td colspan="13">${esc(k)} — ${list.length} line${list.length===1?'':'s'}</td></tr>`+
       list.map(({o,s,st})=>{ const cls=statusClass(st).replace('st-','b-'); const late=buyerLate(o); const exp=buyerExpDeliv(o);
+        const aEtd=orderActualEtd(o);
         return `<tr class="brow ${cls} clickable" onclick="openOrderDetail('${o.id}')">
         <td class="code-cell mono">${esc(o.code)}</td><td>${esc(o.profile||'—')}</td>
         <td class="desc-cell" title="${esc(o.description)}">${esc(o.description)}</td>
         <td class="num mono">${nf(o.orderQty)}</td><td class="num mono">${nf(s.packed)}</td>
         <td class="num mono"><b>${nf(s.outstanding)}</b></td>
+        <td class="mono">${o.plannedEtd?fmtDateShort(new Date(o.plannedEtd+'T00:00:00')):'—'}</td>
+        <td class="mono">${aEtd?fmtDateShort(new Date(aEtd+'T00:00:00')):'—'}</td>
         <td class="mono">${o.plannedEta?fmtDateShort(new Date(o.plannedEta+'T00:00:00')):'—'}</td>
         <td class="mono">${exp?fmtDateShort(exp):'—'}</td>
         <td class="num mono ${late>0?'late':''}">${late>0?late:(late!=null?'0':'–')}</td>
@@ -3702,6 +3801,20 @@ function openPackModal(editId, focusOrderId){
           <div><label>ETD</label><input type="date" id="c_etd" value="${c&&c.etd?c.etd:''}"></div>
           <div><label>ETA</label><input type="date" id="c_eta" value="${c&&c.eta?c.eta:''}"></div>
         </div>
+        <div class="field row">
+          <div><label>Discharge terminal</label><select id="c_terminal">
+            <option value="">— Select —</option>
+            ${TERMINALS.map(t=>`<option value="${t}" ${c&&c.terminal===t?'selected':''}>${t}</option>`).join('')}
+          </select></div>
+          <div>
+            <label>Vessel confirmed</label>
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;padding:9px 0;font-size:13px;color:var(--txt)">
+              <input type="checkbox" id="c_finalVessel" ${(c? c.finalVessel : false)?'checked':''} style="width:16px;height:16px;margin:0;flex:0 0 auto">
+              <span>Final vessel</span>
+            </label>
+            <div class="minor" style="font-size:11px;margin-top:1px">Leave unticked while the vessel could still change — the card shows blue until confirmed.</div>
+          </div>
+        </div>
         <div class="field">
           <label>Sailing type</label>
           <div class="seg" id="c_shipSeg">
@@ -3920,6 +4033,7 @@ function savePackInner(id){
   const transhipment = shipType==='transhipment';
   const data={ containerNo:no, vessel:val('c_vessel').trim(), line:val('c_line').trim(),
     loadDate:val('c_load')||null, etd:val('c_etd')||null, eta:val('c_eta')||null, comment:val('c_comment').trim(), link:val('c_link').trim(),
+    terminal:val('c_terminal')||'', finalVessel:!!(document.getElementById('c_finalVessel')||{}).checked,
     pol:val('c_pol')||'', containerType:val('c_ctype')||'',
     transhipment,
     tsEtd: transhipment ? (val('c_ts_etd')||null) : null,
@@ -4667,6 +4781,7 @@ if('serviceWorker' in navigator){
 }
 
 
+migrateContainerFields();
 applyTheme(); fillFactoryList(); go('dashboard'); renderBackupBanner();
 syncSetState(syncConfigured()?'idle':'off','');
 if(syncConfigured()) syncNow(false);
