@@ -10,7 +10,7 @@
 
    Bump CACHE when you publish a new version of index.html. */
 
-const CACHE = 'order-tracker-v45-2';
+const CACHE = 'order-tracker-v46-2';
 const SHELL = [
   './',
   './index.html',
