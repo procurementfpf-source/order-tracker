@@ -485,10 +485,18 @@ td .mono{font-size:12.5px}
 .invoice table.items th.r{text-align:right}
 .invoice table.items td{padding:6px 9px;font-size:12px;border-bottom:1px solid #eceff3;color:#1b2230}
 .invoice table.items td.qty,.invoice table.items td.price,.invoice table.items td.amt{text-align:right;font-family:'JetBrains Mono',monospace;font-size:11.5px;white-space:nowrap}
-.invoice .inv-price{border-radius:4px;padding:1px 3px;cursor:text}
-.invoice .inv-price:hover{box-shadow:inset 0 0 0 1px #c7d0db}
-.invoice .inv-price:focus{box-shadow:inset 0 0 0 1px #44546a;background:#f5f8fc}
-@media print{.invoice .inv-price:hover,.invoice .inv-price:focus{box-shadow:none;background:none}}
+.invoice .inv-price,.invoice .inv-qty{border-radius:4px;padding:1px 3px;cursor:text}
+.invoice .inv-price:hover,.invoice .inv-qty:hover{box-shadow:inset 0 0 0 1px #c7d0db}
+.invoice .inv-price:focus,.invoice .inv-qty:focus{box-shadow:inset 0 0 0 1px #44546a;background:#f5f8fc}
+.invoice .inv-qty{outline:none;display:inline-block;min-width:28px;text-align:right}
+/* On-screen only: marks a qty deliberately set away from the container's figure.
+   The printed invoice must show the number the customer is being billed for, clean. */
+.invoice .qty-flag{color:#c98a00;font-weight:700;margin-left:2px;cursor:help}
+@media print{
+  .invoice .inv-price:hover,.invoice .inv-price:focus,
+  .invoice .inv-qty:hover,.invoice .inv-qty:focus{box-shadow:none;background:none}
+  .invoice .qty-flag{display:none}
+}
 .invoice table.items td.code{font-family:'JetBrains Mono',monospace;font-size:11.5px;font-weight:500;white-space:nowrap}
 .invoice .miss{color:#c23;font-style:italic} .invoice .miss-amt{color:#c23}
 .invoice .totes{display:flex;justify-content:space-between;margin-top:4px}
@@ -2879,7 +2887,10 @@ function itemsFromContainer(c){
     if(o.po && !agg[key].pos.includes(o.po)) agg[key].pos.push(o.po);
   });
   return Object.values(agg).sort((x,y)=> x.code===y.code ? ((x.price||0)-(y.price||0)) : String(x.code).localeCompare(String(y.code)))
-    .map(a=>({code:a.code, qty:a.qty, price:a.price, periods:a.periods, pos:a.pos}));
+    /* origQty is the container's real figure. invoiceCtx.items is a COPY, so editing
+       qty here never touches the container — origQty just lets us show when the two
+       have been deliberately put out of step. */
+    .map(a=>({code:a.code, qty:a.qty, origQty:a.qty, price:a.price, periods:a.periods, pos:a.pos}));
 }
 function poFromItems(items){ return [...new Set((items||[]).flatMap(it=>it.pos||[]).filter(Boolean))].join(', '); }
 function nextInvNo(){ const y=new Date().getFullYear(); state.settings.invSeq=(state.settings.invSeq||56)+1; return 'INV'+y+String(state.settings.invSeq).padStart(3,'0'); }
@@ -2965,7 +2976,7 @@ function viewInvoice(){
 }
 function renderInvoiceItems(){
   const tb=document.getElementById('inv-body'); if(!tb||!invoiceCtx) return;
-  let sub=0, qt=0; const missing=[];
+  let sub=0, qt=0, editedQty=0; const missing=[];
   if(!invoiceCtx.items.length){
     tb.innerHTML='<tr><td colspan="5" style="padding:20px;text-align:center;color:#909aaa">Pick a container above to build the invoice, or manage codes in the Product list.</td></tr>';
   } else {
@@ -2979,9 +2990,14 @@ function renderInvoiceItems(){
       const tag = split ? [(it.periods&&it.periods.join(', '))||'', (it.pos&&it.pos.join(', '))||''].filter(Boolean).join(' · ') : '';
       const descCell = (info? esc(info.description||'') : '<span class="miss">⚠ not in product list — add it</span>')
         + (tag? `<div style="font-size:9.5px;color:#8a93a3;margin-top:1px;letter-spacing:.02em">${esc(tag)}</div>` : '');
+      if(it.origQty===undefined) it.origQty=it.qty;                          // self-heal older invoices
+      const edited = Number(it.qty)!==Number(it.origQty);
+      const qtyCell = `<span contenteditable="true" class="inv-qty" data-i="${i}" oninput="invQtyInput(${i},this)" onblur="renderInvoiceItems()">${it.qty.toLocaleString()}</span>`
+        + (edited? `<span class="qty-flag" title="Container has ${it.origQty.toLocaleString()} — invoice shows ${it.qty.toLocaleString()}">*</span>` : '');
       const priceInner = hasPrice ? money(price) : '<span class="miss">—</span>';
       const priceCell = `<span contenteditable="true" class="inv-price" data-i="${i}" oninput="invPriceInput(${i},this)" onblur="renderInvoiceItems()" style="outline:none;display:inline-block;min-width:46px">${priceInner}</span>`;
-      return `<tr><td class="qty">${it.qty.toLocaleString()}</td><td class="code">${esc(it.code)}</td>`+
+      if(edited) editedQty++;
+      return `<tr><td class="qty">${qtyCell}</td><td class="code">${esc(it.code)}</td>`+
         `<td>${descCell}</td><td class="price">${priceCell}</td>`+
         `<td class="amt${hasPrice?'':' miss-amt'}" id="amt-${i}">${money(amt)}</td></tr>`; }).join('');
   }
@@ -2992,7 +3008,17 @@ function renderInvoiceItems(){
   document.getElementById('t-grand').textContent=money(sub+vat);
   const m=document.getElementById('inv-status');
   if(m){ if(missing.length){ m.textContent='Needs attention: '+missing.join(', '); m.style.color='var(--red)'; }
+    else if(editedQty){ m.textContent=invoiceCtx.items.length+' line(s) · '+editedQty+' qty edited — container not changed';
+      m.style.color='var(--amber)'; }
     else { m.textContent=invoiceCtx.items.length?invoiceCtx.items.length+' line(s)':''; m.style.color='var(--txt-3)'; } }
+}
+/* Whole units only, and never negative. The container is untouched — this writes to
+   invoiceCtx.items, which is a copy taken when the invoice was generated. */
+function invQtyInput(i, el){
+  if(!invoiceCtx||!invoiceCtx.items[i]) return;
+  const raw=String(el.textContent||'').replace(/[^0-9]/g,'');
+  invoiceCtx.items[i].qty = raw===''? 0 : parseInt(raw,10);
+  recalcInvoiceTotals(); save();
 }
 function invPriceInput(i, el){
   if(!invoiceCtx||!invoiceCtx.items[i]) return;
