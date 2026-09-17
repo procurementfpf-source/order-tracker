@@ -595,7 +595,14 @@ td .mono{font-size:12.5px}
    One row per container, replacing the stacked cards. Namespaced .cg* so it cannot
    disturb .ccard, which the order-group cards still use. */
 .cg-wrap{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
-  overflow:auto;max-height:calc(100vh - 250px);position:relative}
+  overflow:auto;max-height:calc(100vh - 196px);min-height:300px;position:relative}
+/* Full screen: the grid takes the whole viewport, chrome and all. */
+.cg-wrap.cg-full{position:fixed;inset:0;z-index:200;max-height:none;height:100vh;width:100vw;
+  border:none;border-radius:0}
+body.cg-locked{overflow:hidden}
+.cg-exit{position:fixed;top:12px;right:16px;z-index:201;display:none}
+body.cg-locked .cg-exit{display:inline-flex}
+@media (max-width:900px){ .cg-wrap{max-height:calc(100vh - 168px)} }
 table.cg{border-collapse:separate;border-spacing:0;width:100%;white-space:nowrap}
 table.cg th{position:sticky;top:0;z-index:5;background:var(--panel-2);color:var(--txt-2);
   font-size:10.5px;text-transform:uppercase;letter-spacing:.55px;font-weight:700;padding:0;
@@ -1514,6 +1521,7 @@ function viewContainers(){
     <div class="seg">${['On Water','Delivered','all'].map(s=>`<button class="${f.status===s?'active':''}" onclick="filters.containers.status='${s}';render()">${s==='all'?'All':s}</button>`).join('')}</div>
     <button class="btn sm" onclick="expandAllContainers()">Expand all</button>
     <button class="btn sm" onclick="collapseAllContainers()">Collapse all</button>
+    <button class="btn sm" id="cgFullBtn" onclick="cgToggleFull()">${cgFull?'Exit full screen':'Full screen'}</button>
     <button class="btn sm" onclick="cgOpenCols(event)">Columns ▾</button>
     <button class="btn sm" onclick="cgToggleDense()" title="Row height">${contGrid.dense?'Comfortable':'Compact'}</button>
     ${cgActiveFilters()?`<button class="btn sm" onclick="cgClearFilters()">Clear ${cgActiveFilters()} filter${cgActiveFilters()===1?'':'s'}</button>`:''}
@@ -1521,6 +1529,7 @@ function viewContainers(){
     <span class="minor" style="font-size:12px" id="contCount">${containersCountText()}</span>
   </div>
   <div id="contBulkBar">${containersBulkBarHTML()}</div>
+  <button class="btn sm cg-exit" onclick="cgExitFull()">Exit full screen (Esc)</button>
   <div id="containersList">${containersListHTML()}</div>`;
 }
 /* ============ CONTAINERS GRID ============
@@ -1541,14 +1550,14 @@ function cgSave(){ try{ localStorage.setItem(CG_KEY, JSON.stringify(
    handful that fit an A4 page — the rest are dropped from a printout rather than
    spilling off the edge. */
 const CG_COLS=[
+  {k:'factory', t:'Factory', w:150, filter:true, val:c=>containerFactory(c)||''},
   {k:'containerNo', t:'Container no', w:134, cls:'mono cg-cno', filter:true, print:true,
    val:c=>(c.containerNo||'').replace(/\s+/g,'')},
+  {k:'pol', t:'POL', w:88, filter:true},
   {k:'vessel', t:'Vessel', w:172, cls:'cg-vessel', filter:true, print:true,
    cell:c=>esc(c.vessel||'—')+(c.transhipment?`<span class="cg-chip" title="Transhipment · ${fmtDateShort(c.tsEta)} → ${fmtDateShort(c.tsEtd)}${c.tsVessel?' · '+esc(c.tsVessel):''}">TS</span>`:'')},
   {k:'line', t:'Line', w:92, filter:true},
   {k:'containerType', t:'Type', w:74, filter:true},
-  {k:'pol', t:'POL', w:88, filter:true},
-  {k:'factory', t:'Factory', w:150, filter:true, val:c=>containerFactory(c)||''},
   {k:'terminal', t:'Terminal', w:88, filter:true},
   {k:'etd', t:'ETD', w:88, cls:'mono', filter:true, print:true, cell:c=>fmtDateShort(c.etd)},
   {k:'eta', t:'ETA', w:88, cls:'mono', filter:true, print:true, cell:c=>fmtDateShort(c.eta)},
@@ -1565,9 +1574,9 @@ const CG_COLS=[
   {k:'units', t:'Units', w:78, cls:'mono num', num:true, print:true,
    val:c=>containerStats(c).units, cell:c=>nf(containerStats(c).units)},
   {k:'status', t:'Status', w:106, filter:true, print:true,
-   val:c=>c.status==='Delivered'?'Delivered':(c.finalVessel?'On water':'Vessel TBC'),
+   val:c=>c.status==='Delivered'?'Delivered':(c.finalVessel===false?'Vessel TBC':'On water'),
    cell:c=>c.status==='Delivered'?'<span class="badge-st st-green">Delivered</span>'
-        :(c.finalVessel?'<span class="minor">On water</span>':'<span class="badge-st st-blue">Vessel TBC</span>')},
+        :(c.finalVessel===false?'<span class="badge-st st-blue">Vessel TBC</span>':'<span class="minor">On water</span>')},
 ];
 function cgVal(c,col){ return col.val? col.val(c) : (c[col.k]==null?'':c[col.k]); }
 function cgVisibleCols(){ const h=new Set(contGrid.hidden); return CG_COLS.filter(c=>!h.has(c.k)); }
@@ -1598,6 +1607,16 @@ function cgSort(k){
   if(contGrid.sort===k) contGrid.dir=-contGrid.dir; else { contGrid.sort=k; contGrid.dir=1; }
   cgSave(); cgRefresh();
 }
+let cgFull=false;
+function cgToggleFull(){
+  cgFull=!cgFull;
+  document.body.classList.toggle('cg-locked',cgFull);
+  cgRefresh();
+  /* The toolbar button's own label changes, and it is outside the list, so redraw it. */
+  const t=document.getElementById('cgFullBtn'); if(t) t.textContent=cgFull?'Exit full screen':'Full screen';
+}
+function cgExitFull(){ if(cgFull) cgToggleFull(); }
+document.addEventListener('keydown',e=>{ if(e.key==='Escape' && cgFull) cgExitFull(); });
 function cgToggleDense(){
   contGrid.dense=!contGrid.dense; cgSave();
   document.documentElement.style.setProperty('--cg-row', contGrid.dense?'26px':'34px');
@@ -1632,7 +1651,9 @@ function containersGridHTML(){
 
   const body = rows.map(c=>{
     const open=expandedContainers.has(c.id);
-    const prov=!c.finalVessel && c.status!=='Delivered';
+    /* Only an explicit false is provisional. A container predating the field reads as
+       final, so rows do not all turn blue before the migration has run. */
+    const prov=c.finalVessel===false && c.status!=='Delivered';
     const tds=cols.map(col=>{
       const raw=cgVal(c,col);
       return `<td class="${col.cls||''} ${col.print?'':'cg-noprint'}" title="${esc(String(raw==null?'':raw))}">${
@@ -1656,7 +1677,7 @@ function containersGridHTML(){
       (open?`<tr class="cg-detail"><td colspan="${cols.length+3}"><div class="cg-detail-inner">${containerBodyHTML(c)}</div></td></tr>`:'');
   }).join('');
 
-  return `<div class="cg-wrap"><table class="cg"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
+  return `<div class="cg-wrap ${cgFull?'cg-full':''}"><table class="cg"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
 }
 
 /* ---- column filter popover ---- */
@@ -1796,6 +1817,17 @@ const TERMINALS = ['DGT','Pier 1','MPT'];
      alone — it is a real comment.
    - Existing containers are marked final so nothing already on the water suddenly
      turns blue. New ones start unticked, see openPackModal. */
+let migrationDone=false;
+/* Must NOT run before this device has pulled. Writing these fields marks every
+   container as locally edited with a current timestamp, and the boot sync pushes
+   before it pulls — so a device that had not caught up would upload its stale copy
+   over another device's newer change, and win on timestamp. It runs after a
+   successful sync instead, when this device is level with the sheet. */
+function maybeMigrate(){
+  if(migrationDone) return;
+  migrationDone=true;
+  if(migrateContainerFields()) render();
+}
 function migrateContainerFields(){
   let n=0;
   (state.containers||[]).forEach(c=>{
@@ -1807,6 +1839,7 @@ function migrateContainerFields(){
     }
   });
   if(n) save();
+  return n>0;
 }
 
 /* Earliest ETD across every container carrying this order — the day its stock
@@ -4309,7 +4342,7 @@ function bulkCurrent(key){
     const c=container(id); if(!c) return '';
     if(key==='shipType') return c.transhipment? 'transhipment':'direct';
     /* A boolean would collapse to '' below and read as "no value" rather than "not final". */
-    if(key==='finalVessel') return c.finalVessel? 'yes':'no';
+    if(key==='finalVessel') return c.finalVessel===false? 'no':'yes';
     const v=c[key];
     return (v==null||v===false)? '' : String(v);
   });
@@ -4837,6 +4870,10 @@ async function syncRun(manual, opts){
       return await syncRun(manual, {});
     }
 
+    /* Level with the sheet now, so a one-off data migration is safe: what it writes
+       is genuinely newer than what every other device holds. */
+    maybeMigrate();
+
     syncDirty=false; ok=true;
     syncSetState('idle', applied? (applied+' change'+(applied===1?'':'s')+' pulled in') : '');
     if(manual) toast(applied? ('Synced — '+applied+' change'+(applied===1?'':'s')+' pulled in') : 'Synced — everything up to date');
@@ -5025,11 +5062,11 @@ if('serviceWorker' in navigator){
 }
 
 
-migrateContainerFields();
 document.documentElement.style.setProperty('--cg-row', contGrid.dense?'26px':'34px');
 applyTheme(); fillFactoryList(); go('dashboard'); renderBackupBanner();
 syncSetState(syncConfigured()?'idle':'off','');
 if(syncConfigured()) syncNow(false);
+else maybeMigrate();          // standalone device: nothing to catch up with
 </script>
 </body>
 </html>
