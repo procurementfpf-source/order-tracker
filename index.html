@@ -591,6 +591,70 @@ td .mono{font-size:12.5px}
 @keyframes syncSpin{0%,100%{opacity:1}50%{opacity:.25}}
 @media(max-width:900px){.sync-pill .lbl{display:none}.sync-pill{padding:6px}}
 @media print{.sync-pill{display:none!important}}
+/* ============ CONTAINERS GRID ============
+   One row per container, replacing the stacked cards. Namespaced .cg* so it cannot
+   disturb .ccard, which the order-group cards still use. */
+.cg-wrap{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
+  overflow:auto;max-height:calc(100vh - 250px);position:relative}
+table.cg{border-collapse:separate;border-spacing:0;width:100%;white-space:nowrap}
+table.cg th{position:sticky;top:0;z-index:5;background:var(--panel-2);color:var(--txt-2);
+  font-size:10.5px;text-transform:uppercase;letter-spacing:.55px;font-weight:700;padding:0;
+  border-bottom:2px solid var(--line);border-right:1px solid var(--line-soft);text-align:left}
+.cg-th{display:flex;align-items:center;gap:4px;padding:7px 9px;user-select:none}
+.cg-th .lab{flex:1;overflow:hidden;text-overflow:ellipsis;cursor:pointer}
+.cg-th .lab:hover{color:var(--txt)}
+.cg-sort{font-size:9px;color:var(--accent);width:8px;flex:0 0 auto}
+.cg-funnel{width:15px;height:15px;flex:0 0 auto;display:grid;place-items:center;border-radius:4px;
+  color:var(--txt-3);cursor:pointer}
+.cg-funnel:hover{background:var(--line);color:var(--txt)}
+.cg-funnel.on{color:var(--accent);background:var(--accent-soft)}
+.cg-funnel svg{width:10px}
+table.cg td{padding:0 9px;height:var(--cg-row,34px);border-bottom:1px solid var(--line-soft);
+  border-right:1px solid var(--line-soft);color:var(--txt-2);overflow:hidden;text-overflow:ellipsis;max-width:280px}
+table.cg td.num,table.cg th.num .cg-th{text-align:right}
+table.cg td.num{text-align:right}
+tr.cg-row:hover td{background:var(--panel-2)}
+tr.cg-row.sel td,tr.cg-row.sel:hover td{background:var(--accent-soft)}
+/* Vessel not confirmed — the whole row carries what used to tint the card head. */
+tr.cg-row.prov td,tr.cg-row.prov:hover td{background:var(--blue-bg)}
+tr.cg-row.prov.sel td{background:var(--accent-soft)}
+td.cg-cno{font-weight:600;color:var(--txt)}
+td.cg-vessel{color:var(--txt);font-weight:500}
+.cg-chip{display:inline-block;font-size:9.5px;font-weight:700;letter-spacing:.4px;padding:1px 5px;
+  border-radius:4px;background:var(--amber-bg);color:var(--amber);margin-left:5px;vertical-align:1px}
+/* Sticky identity columns: with this many columns you scroll sideways, and without
+   these pinned you lose track of which container a row belongs to. */
+.cg-stick{position:sticky;z-index:4;background:var(--panel)}
+th.cg-stick{z-index:6;background:var(--panel-2)}
+.cg-s0{left:0;width:34px;min-width:34px}
+.cg-s1{left:34px;width:30px;min-width:30px}
+.cg-s2{left:64px;min-width:134px;box-shadow:1px 0 0 var(--line)}
+tr.cg-row:hover .cg-stick{background:var(--panel-2)}
+tr.cg-row.sel .cg-stick{background:var(--accent-soft)}
+tr.cg-row.prov .cg-stick{background:var(--blue-bg)}
+tr.cg-row.prov.sel .cg-stick{background:var(--accent-soft)}
+tr.cg-row.open .caret svg{transform:rotate(90deg)}
+tr.cg-detail>td{padding:0;background:var(--bg-2);border-bottom:2px solid var(--line)}
+.cg-detail-inner{padding:10px 16px 12px 64px;white-space:normal}
+.cg-acts{display:flex;gap:5px;justify-content:flex-end}
+.cg-pop,.cg-cols{position:fixed;z-index:60;background:var(--panel);border:1px solid var(--line);
+  border-radius:var(--radius-s);box-shadow:var(--shadow);padding:8px;min-width:196px;max-width:270px;display:none}
+.cg-pop.open,.cg-cols.open{display:block}
+.cg-pop input.f{width:100%;background:var(--bg-2);border:1px solid var(--line);border-radius:6px;
+  color:var(--txt);font-family:inherit;font-size:12px;padding:6px 8px;outline:none;margin-bottom:6px}
+.cg-pop .opts{max-height:216px;overflow:auto}
+.cg-pop label,.cg-cols label{display:flex;align-items:center;gap:7px;padding:4px 6px;border-radius:5px;
+  font-size:12.5px;cursor:pointer;color:var(--txt-2)}
+.cg-pop label:hover,.cg-cols label:hover{background:var(--panel-2);color:var(--txt)}
+.cg-pop .foot{display:flex;gap:6px;margin-top:7px;border-top:1px solid var(--line-soft);padding-top:7px}
+.cg-pop .foot button{flex:1}
+@media print{
+  .cg-wrap{max-height:none;overflow:visible;border:none;border-radius:0}
+  .cg-stick{position:static}
+  table.cg th{position:static}
+  .cg-noprint{display:none!important}
+  table.cg td{white-space:normal}
+}
 </style>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0f1420">
@@ -1448,8 +1512,6 @@ function visibleContainers(){
 }
 function viewContainers(){
   const f=filters.containers;
-  const cs=visibleContainers();
-  const allSelected = cs.length>0 && cs.every(c=>selectedContainers.has(c.id));
   return `
   <div class="print-head"><h1>Containers</h1><p>Much Better Furniture · ${fmtDate(todayISO())}</p></div>
   <div class="toolbar no-print">
@@ -1458,18 +1520,217 @@ function viewContainers(){
     <div class="seg">${['On Water','Delivered','all'].map(s=>`<button class="${f.status===s?'active':''}" onclick="filters.containers.status='${s}';render()">${s==='all'?'All':s}</button>`).join('')}</div>
     <button class="btn sm" onclick="expandAllContainers()">Expand all</button>
     <button class="btn sm" onclick="collapseAllContainers()">Collapse all</button>
-    <label style="display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--txt-2);cursor:pointer;margin-left:4px">
-      <input type="checkbox" ${allSelected?'checked':''} onchange="toggleSelectAllContainers()"> Select all
-    </label>
+    <button class="btn sm" onclick="cgOpenCols(event)">Columns ▾</button>
+    <button class="btn sm" onclick="cgToggleDense()" title="Row height">${contGrid.dense?'Comfortable':'Compact'}</button>
+    ${cgActiveFilters()?`<button class="btn sm" onclick="cgClearFilters()">Clear ${cgActiveFilters()} filter${cgActiveFilters()===1?'':'s'}</button>`:''}
     <div style="flex:1"></div>
     <span class="minor" style="font-size:12px" id="contCount">${containersCountText()}</span>
   </div>
   <div id="contBulkBar">${containersBulkBarHTML()}</div>
   <div id="containersList">${containersListHTML()}</div>`;
 }
+/* ============ CONTAINERS GRID ============
+   Column layout, filters and density are per-device: a phone wants fewer columns than
+   the office PC, and keeping them out of state.settings means toggling a column does
+   not dirty the synced record and push a sync on every click. */
+const CG_KEY='mbf_cont_grid_v1';
+let contGrid=(function(){
+  const d={sort:'eta', dir:1, hidden:[], dense:false};
+  try{ const r=localStorage.getItem(CG_KEY); return r? Object.assign(d,JSON.parse(r)) : d; }
+  catch(e){ return d; }
+})();
+contGrid.colFilters={};                       // filters are per-session, never persisted
+function cgSave(){ try{ localStorage.setItem(CG_KEY, JSON.stringify(
+  {sort:contGrid.sort, dir:contGrid.dir, hidden:contGrid.hidden, dense:contGrid.dense})); }catch(e){} }
+
+/* Every column below was already visible on the container card. print:true marks the
+   handful that fit an A4 page — the rest are dropped from a printout rather than
+   spilling off the edge. */
+const CG_COLS=[
+  {k:'containerNo', t:'Container no', w:134, cls:'mono cg-cno', stick:'cg-s2', filter:true, print:true,
+   val:c=>(c.containerNo||'').replace(/\s+/g,'')},
+  {k:'vessel', t:'Vessel', w:172, cls:'cg-vessel', filter:true, print:true,
+   cell:c=>esc(c.vessel||'—')+(c.transhipment?`<span class="cg-chip" title="Transhipment · ${fmtDateShort(c.tsEta)} → ${fmtDateShort(c.tsEtd)}${c.tsVessel?' · '+esc(c.tsVessel):''}">TS</span>`:'')},
+  {k:'line', t:'Line', w:92, filter:true},
+  {k:'containerType', t:'Type', w:74, filter:true},
+  {k:'pol', t:'POL', w:88, filter:true},
+  {k:'factory', t:'Factory', w:150, filter:true, val:c=>containerFactory(c)||''},
+  {k:'terminal', t:'Terminal', w:88, filter:true},
+  {k:'etd', t:'ETD', w:88, cls:'mono', filter:true, print:true, cell:c=>fmtDateShort(c.etd)},
+  {k:'eta', t:'ETA', w:88, cls:'mono', filter:true, print:true, cell:c=>fmtDateShort(c.eta)},
+  {k:'expected', t:'Expected', w:96, cls:'mono', print:true,
+   val:c=>c.status==='Delivered'?(c.deliveredAt||''):(containerStats(c).expDeliv||''),
+   cell:c=>fmtDateShort(c.status==='Delivered'? c.deliveredAt : containerStats(c).expDeliv)},
+  {k:'transit', t:'Transit', w:78, cls:'mono num', num:true,
+   val:c=>{const t=transitDays(c); return t==null?null:t;},
+   cell:c=>{const t=transitDays(c); return t==null?'—':t+'d';}},
+  {k:'ts', t:'Transship', w:152, cls:'mono',
+   val:c=>c.transhipment?(c.tsEta||''):'',
+   cell:c=>c.transhipment?`${fmtDateShort(c.tsEta)} → ${fmtDateShort(c.tsEtd)}`:'<span class="minor">—</span>'},
+  {k:'comment', t:'Comment', w:190, cell:c=>c.comment?esc(c.comment):'<span class="minor">—</span>'},
+  {k:'units', t:'Units', w:78, cls:'mono num', num:true, print:true,
+   val:c=>containerStats(c).units, cell:c=>nf(containerStats(c).units)},
+  {k:'status', t:'Status', w:106, filter:true, print:true,
+   val:c=>c.status==='Delivered'?'Delivered':(c.finalVessel?'On water':'Vessel TBC'),
+   cell:c=>c.status==='Delivered'?'<span class="badge-st st-green">Delivered</span>'
+        :(c.finalVessel?'<span class="minor">On water</span>':'<span class="badge-st st-blue">Vessel TBC</span>')},
+];
+function cgVal(c,col){ return col.val? col.val(c) : (c[col.k]==null?'':c[col.k]); }
+function cgVisibleCols(){ const h=new Set(contGrid.hidden); return CG_COLS.filter(c=>!h.has(c.k)); }
+
+/* visibleContainers() already applies the search box and the status segments; the
+   column funnels narrow it further, then the header sort replaces its ETA ordering. */
+function cgRows(){
+  let cs=visibleContainers();
+  const f=contGrid.colFilters;
+  Object.keys(f).forEach(k=>{
+    const set=f[k]; if(!set||!set.size) return;
+    const col=CG_COLS.find(x=>x.k===k); if(!col) return;
+    cs=cs.filter(c=>set.has(String(cgVal(c,col)||'(blank)')));
+  });
+  const col=CG_COLS.find(x=>x.k===contGrid.sort);
+  if(col){
+    const d=contGrid.dir;
+    cs.sort((a,b)=>{
+      let x=cgVal(a,col), y=cgVal(b,col);
+      if(col.num){ x=(x==null?Infinity:x); y=(y==null?Infinity:y); return (x-y)*d; }
+      x=String(x||'\uffff'); y=String(y||'\uffff');
+      return x.localeCompare(y,undefined,{numeric:true})*d;
+    });
+  }
+  return cs;
+}
+function cgSort(k){
+  if(contGrid.sort===k) contGrid.dir=-contGrid.dir; else { contGrid.sort=k; contGrid.dir=1; }
+  cgSave(); cgRefresh();
+}
+function cgToggleDense(){
+  contGrid.dense=!contGrid.dense; cgSave();
+  document.documentElement.style.setProperty('--cg-row', contGrid.dense?'26px':'34px');
+  render();
+}
+function cgClearFilters(){ contGrid.colFilters={}; cgRefresh(); }
+function cgActiveFilters(){ return Object.keys(contGrid.colFilters).filter(k=>contGrid.colFilters[k]&&contGrid.colFilters[k].size).length; }
+function cgRefresh(){
+  const el=document.getElementById('containersList'); if(el) el.innerHTML=containersListHTML();
+  const c=document.getElementById('contCount'); if(c) c.textContent=containersCountText();
+  const b=document.getElementById('contBulkBar'); if(b) b.innerHTML=containersBulkBarHTML();
+}
+
+function containersGridHTML(){
+  const cols=cgVisibleCols(), rows=cgRows();
+  const allSel = rows.length>0 && rows.every(c=>selectedContainers.has(c.id));
+  const head =
+    `<th class="cg-stick cg-s0 cg-noprint"><div class="cg-th" style="justify-content:center">
+       <input type="checkbox" ${allSel?'checked':''} title="Select all" onclick="toggleSelectAllContainers()" style="width:14px;height:14px;margin:0"></div></th>`+
+    `<th class="cg-stick cg-s1 cg-noprint"></th>`+
+    cols.map(col=>{
+      const on=contGrid.colFilters[col.k]&&contGrid.colFilters[col.k].size;
+      return `<th class="${col.stick?'cg-stick '+col.stick:''} ${col.num?'num':''} ${col.print?'':'cg-noprint'}" style="min-width:${col.w}px">
+        <div class="cg-th">
+          <span class="lab" onclick="cgSort('${col.k}')">${esc(col.t)}</span>
+          <span class="cg-sort">${contGrid.sort===col.k?(contGrid.dir>0?'▲':'▼'):''}</span>
+          ${col.filter?`<span class="cg-funnel ${on?'on':''}" title="Filter" onclick="cgOpenFilter(event,'${col.k}')">
+            <svg viewBox="0 0 24 24" fill="${on?'currentColor':'none'}" stroke="currentColor" stroke-width="2"><path d="M3 4h18l-7 8v6l-4 2v-8z"/></svg></span>`:''}
+        </div></th>`;
+    }).join('')+
+    `<th class="cg-noprint" style="min-width:190px"><div class="cg-th"><span class="lab" style="cursor:default">Actions</span></div></th>`;
+
+  const body = rows.map(c=>{
+    const open=expandedContainers.has(c.id);
+    const prov=!c.finalVessel && c.status!=='Delivered';
+    const tds=cols.map(col=>{
+      const raw=cgVal(c,col);
+      return `<td class="${col.cls||''} ${col.stick?'cg-stick '+col.stick:''} ${col.print?'':'cg-noprint'}" title="${esc(String(raw==null?'':raw))}">${
+        col.cell? col.cell(c) : (esc(String(raw||''))||'—')}</td>`;
+    }).join('');
+    return `<tr class="cg-row ${selectedContainers.has(c.id)?'sel':''} ${prov?'prov':''} ${open?'open':''}" data-cc="${c.id}">
+      <td class="cg-stick cg-s0 cg-noprint" style="text-align:center">
+        <input type="checkbox" title="Select for bulk edit" ${selectedContainers.has(c.id)?'checked':''}
+          onclick="toggleContainerSelect('${c.id}')" style="width:14px;height:14px;margin:0"></td>
+      <td class="cg-stick cg-s1 cg-noprint">
+        <button class="caret" title="Show contents" onclick="toggleContainer('${c.id}')">
+          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="m9 18 6-6-6-6"/></svg></button></td>
+      ${tds}
+      <td class="cg-noprint"><div class="cg-acts">
+        ${c.status==='Delivered'?`<button class="btn sm" onclick="unreceiveContainer('${c.id}')">Reopen</button>`
+                                :`<button class="btn sm primary" onclick="receiveContainer('${c.id}')">Mark received</button>`}
+        <button class="btn sm" onclick="openPackModal('${c.id}')">Edit</button>
+        <div class="cc-menu-wrap"><button class="btn sm cc-menu-btn" title="More actions" onclick="ccMenu('${c.id}',event)">···</button>
+          <div class="cc-menu" id="ccm-${c.id}"></div></div>
+      </div></td></tr>`+
+      (open?`<tr class="cg-detail"><td colspan="${cols.length+3}"><div class="cg-detail-inner">${containerBodyHTML(c)}</div></td></tr>`:'');
+  }).join('');
+
+  return `<div class="cg-wrap"><table class="cg"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
+}
+
+/* ---- column filter popover ---- */
+let cgPopKey=null;
+function cgOpenFilter(ev,k){
+  ev.stopPropagation(); cgPopKey=k;
+  const col=CG_COLS.find(x=>x.k===k); if(!col) return;
+  /* Offer the values actually present under the current search and status, so the list
+     never suggests something that would return nothing. */
+  const vals=[...new Set(visibleContainers().map(c=>String(cgVal(c,col)||'(blank)')))]
+    .sort((a,b)=>a.localeCompare(b,undefined,{numeric:true}));
+  const cur=contGrid.colFilters[k]||new Set();
+  const p=cgPopEl();
+  p.innerHTML=`<input class="f" placeholder="Search values…" oninput="cgFilterOpts(this.value)">
+    <div class="opts" id="cgOpts">${vals.map(v=>`<label><input type="checkbox" value="${esc(v)}" ${cur.size===0||cur.has(v)?'checked':''} style="width:14px;height:14px;margin:0"> <span>${esc(v)}</span></label>`).join('')||'<div class="minor" style="padding:8px">No values</div>'}</div>
+    <div class="foot"><button class="btn sm" onclick="cgSetAllOpts(true)">All</button>
+      <button class="btn sm" onclick="cgSetAllOpts(false)">None</button>
+      <button class="btn sm primary" onclick="cgApplyFilter()">Apply</button></div>`;
+  const r=ev.currentTarget.getBoundingClientRect();
+  p.style.left=Math.max(8,Math.min(r.left,window.innerWidth-280))+'px';
+  p.style.top=(r.bottom+5)+'px';
+  p.classList.add('open');
+}
+function cgPopEl(){
+  let p=document.getElementById('cgPop');
+  if(!p){ p=document.createElement('div'); p.id='cgPop'; p.className='cg-pop';
+    p.addEventListener('click',e=>e.stopPropagation()); document.body.appendChild(p); }
+  return p;
+}
+function cgFilterOpts(q){ q=(q||'').toLowerCase();
+  document.querySelectorAll('#cgOpts label').forEach(l=>{ l.style.display=l.textContent.toLowerCase().includes(q)?'':'none'; }); }
+function cgSetAllOpts(on){ document.querySelectorAll('#cgOpts input').forEach(i=>{ if(i.closest('label').style.display!=='none') i.checked=on; }); }
+function cgApplyFilter(){
+  const boxes=[...document.querySelectorAll('#cgOpts input')];
+  const picked=boxes.filter(b=>b.checked).map(b=>b.value);
+  if(picked.length===boxes.length) delete contGrid.colFilters[cgPopKey];
+  else contGrid.colFilters[cgPopKey]=new Set(picked);
+  cgClosePops(); cgRefresh();
+}
+/* ---- column chooser ---- */
+function cgOpenCols(ev){
+  ev.stopPropagation();
+  let b=document.getElementById('cgCols');
+  if(!b){ b=document.createElement('div'); b.id='cgCols'; b.className='cg-cols';
+    b.addEventListener('click',e=>e.stopPropagation()); document.body.appendChild(b); }
+  const h=new Set(contGrid.hidden);
+  b.innerHTML=CG_COLS.map(c=>`<label><input type="checkbox" ${h.has(c.k)?'':'checked'} onchange="cgToggleCol('${c.k}',this.checked)" style="width:14px;height:14px;margin:0"> ${esc(c.t)}</label>`).join('');
+  const r=ev.currentTarget.getBoundingClientRect();
+  b.style.left=Math.max(8,Math.min(r.left,window.innerWidth-220))+'px';
+  b.style.top=(r.bottom+5)+'px';
+  b.classList.add('open');
+}
+function cgToggleCol(k,on){
+  const h=new Set(contGrid.hidden);
+  if(on) h.delete(k); else h.add(k);
+  contGrid.hidden=[...h]; cgSave(); cgRefresh();
+}
+function cgClosePops(){
+  const p=document.getElementById('cgPop'); if(p) p.classList.remove('open');
+  const b=document.getElementById('cgCols'); if(b) b.classList.remove('open');
+}
+document.addEventListener('click',cgClosePops);
+
 function containersCountText(){
-  const f=filters.containers, cs=visibleContainers();
-  return `${cs.length} ${f.status==='all'?'container'+(cs.length===1?'':'s'):(f.status==='On Water'?'on water':'delivered')}${f.status!=='all'?' of '+state.containers.length:''} · earliest ETA first`;
+  const f=filters.containers, cs=cgRows();
+  const col=CG_COLS.find(x=>x.k===contGrid.sort);
+  const order=col? ('sorted by '+col.t.toLowerCase()+(contGrid.dir>0?'':', reversed')) : '';
+  return `${cs.length} ${f.status==='all'?'container'+(cs.length===1?'':'s'):(f.status==='On Water'?'on water':'delivered')}${f.status!=='all'?' of '+state.containers.length:''}${order?' · '+order:''}`;
 }
 function containersBulkBarHTML(){
   if(!selectedContainers.size) return '';
@@ -1481,8 +1742,8 @@ function containersBulkBarHTML(){
 }
 /* Built apart from the toolbar so search can refresh only the cards. */
 function containersListHTML(){
-  const f=filters.containers, cs=visibleContainers();
-  if(cs.length) return cs.map(containerCard).join('');
+  const f=filters.containers, cs=cgRows();
+  if(cs.length) return containersGridHTML();
   return `<div class="panel"><div class="panel-body">${
       !state.containers.length
         ? emptyBlock('No containers yet','pack','When a packing list comes in, click “Pack container” to ship stock from your orders.')
@@ -1492,14 +1753,14 @@ function containersListHTML(){
 }
 function toggleContainerSelect(id){
   if(selectedContainers.has(id)) selectedContainers.delete(id); else selectedContainers.add(id);
-  render();
+  cgRefresh();
 }
 function toggleSelectAllContainers(){
-  const cs=visibleContainers();
+  const cs=cgRows();
   const allSelected = cs.length>0 && cs.every(c=>selectedContainers.has(c.id));
   if(allSelected) cs.forEach(c=>selectedContainers.delete(c.id));
   else cs.forEach(c=>selectedContainers.add(c.id));
-  render();
+  cgRefresh();
 }
 /* Secondary container actions live in a small menu so every row's action area is the
    same width — otherwise delivered rows push the date columns out of alignment. */
@@ -1566,60 +1827,8 @@ function orderActualEtd(o){
   return best;
 }
 
-function containerCard(c){
-  const st=containerStats(c); const exp=st.expDeliv; const open=expandedContainers.has(c.id);
-  const tDays=transitDays(c);
-  const deliv=c.status==='Delivered';
-  const factory=containerFactory(c);
-  /* Container numbers are quoted without spaces on paperwork, so display them that way. */
-  const cno=(c.containerNo||'').replace(/\s+/g,'');
-  /* The quiet strip under the head. Skipped entirely when there is nothing to put in it. */
-  const metaBits=[];
-  if(factory) metaBits.push(`<span class="cc-fact" title="Factory of first item loaded">${esc(factory)}</span>`);
-  const route=[c.line?esc(c.line):'', c.containerType?esc(c.containerType):'', c.pol?'POL '+esc(c.pol):'']
-    .filter(Boolean).join(' <span class="cc-sep">·</span> ');
-  if(route) metaBits.push(`<span>${route}</span>`);
-  if(c.comment) metaBits.push(`<span title="${esc(c.comment)}" style="max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(c.comment)}</span>`);
-  /* Terminal is pushed to the far right of the strip — same weight as the factory
-     name on the left, so the two read as a pair: where it came from, where it lands. */
-  if(c.terminal) metaBits.push(`<span class="cc-fact cc-term" title="Discharge terminal">${esc(c.terminal)}</span>`);
-  /* Not-yet-final vessel: the head takes the meta strip's colour so the whole card
-     reads as one provisional block until the booking is confirmed. */
-  const prov = !c.finalVessel && !deliv;
-  return `<div class="panel ccard ${open?'open':''} ${prov?'cc-prov':''}" data-cc="${c.id}">
-    <div class="panel-head ccard-head" onclick="toggleContainer('${c.id}')">
-      <input type="checkbox" class="no-print" title="Select for bulk edit" onclick="event.stopPropagation();toggleContainerSelect('${c.id}')" ${selectedContainers.has(c.id)?'checked':''} style="width:16px;height:16px;flex:0 0 auto">
-      <button class="caret" title="Show contents" onclick="event.stopPropagation();toggleContainer('${c.id}')"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="m9 18 6-6-6-6"/></svg></button>
-      <div class="cc-id">
-        <div class="cc-vessel">${esc(c.vessel||'(no vessel)')}</div>
-        <div class="cc-no mono">${esc(cno||'(no number)')}</div>
-      </div>
-      <div class="cc-grid">
-        <div class="cc-cell"><span class="k">ETD</span><span class="v mono">${fmtDateShort(c.etd)}</span></div>
-        <div class="cc-cell"><span class="k">ETA</span><span class="v mono strong">${fmtDateShort(c.eta)}</span></div>
-        <div class="cc-cell opt"><span class="k">${deliv?'Arrived':'Expected'}</span><span class="v mono">${fmtDateShort(deliv? c.deliveredAt : exp)}</span></div>
-        <div class="cc-cell opt2"><span class="k">Transit</span><span class="v mono">${tDays==null?'—':tDays+'d'}</span></div>
-        <div class="cc-cell">${c.transhipment
-          ? `<span class="k">Transship</span><span class="v mono">${fmtDateShort(c.tsEta)} → ${fmtDateShort(c.tsEtd)}</span>`
-          : ''}</div>
-      </div>
-      <div class="cc-tail">
-        <div class="cc-badge-slot">${deliv?'<span class="badge-st st-green">Delivered</span>':''}</div>
-        <div class="no-print ccard-actions" onclick="event.stopPropagation()">
-          ${deliv?`<button class="btn sm" onclick="unreceiveContainer('${c.id}')">Reopen</button>`
-                 :`<button class="btn sm primary" onclick="receiveContainer('${c.id}')">Mark received</button>`}
-          <button class="btn sm" onclick="openPackModal('${c.id}')">Edit</button>
-          <div class="cc-menu-wrap">
-            <button class="btn sm cc-menu-btn" title="More actions" onclick="ccMenu('${c.id}',event)">···</button>
-            <div class="cc-menu" id="ccm-${c.id}"></div>
-          </div>
-        </div>
-      </div>
-    </div>
-    ${metaBits.length? `<div class="cc-meta">${metaBits.join('')}</div>` : ''}
-    <div class="ccard-body" id="cbody-${c.id}" style="display:${open?'block':'none'}">${open?containerBodyHTML(c):''}</div>
-  </div>`;
-}
+/* containerCard() removed — the Containers tab is a grid now (containersGridHTML).
+   The .ccard / .ccard-head / .caret CSS stays: the order-group cards still use it. */
 function containerBodyHTML(c){
   return `<div class="tbl-wrap">
     <table><thead><tr><th>Code</th><th>Profile</th><th>Description</th><th>Order month</th><th class="num">Qty shipped</th></tr></thead>
@@ -1641,10 +1850,11 @@ function safeUrl(u){
   if(!/^https?:\/\//i.test(u)) u='https://'+u;
   return u;
 }
+/* A grid row's detail is a second <tr>, so it is inserted and removed by redrawing the
+   list rather than by toggling a hidden block inside a card. */
 function toggleContainer(id){
-  const body=document.getElementById('cbody-'+id); const card=document.querySelector('[data-cc="'+id+'"]');
-  if(expandedContainers.has(id)){ expandedContainers.delete(id); if(body) body.style.display='none'; if(card) card.classList.remove('open'); }
-  else { expandedContainers.add(id); if(body){ if(!body.innerHTML.trim()) body.innerHTML=containerBodyHTML(container(id)); body.style.display='block'; } if(card) card.classList.add('open'); }
+  if(expandedContainers.has(id)) expandedContainers.delete(id); else expandedContainers.add(id);
+  cgRefresh();
 }
 function expandAllContainers(){ state.containers.forEach(c=>expandedContainers.add(c.id)); render(); }
 function collapseAllContainers(){ expandedContainers.clear(); render(); }
@@ -1902,15 +2112,17 @@ function arrivalsRows(){
   const months=arrivalsMonths(); const mKeys=months.map(monthKey);
   const groups=new Map();
   state.orders.map(o=>({o,s:orderStats(o)})).filter(r=>r.s.outstanding>0).forEach(({o,s})=>{
-    const key=String(o.code||'?');
+    /* Profile is the colour. A code is sold in several, so the code ALONE is not a
+       unique product — keying on it merged White and Black into one row and reported
+       the whole quantity under whichever colour was seen first. */
+    const key=String(o.code||'?')+'\u0000'+String(o.profile||'');
     let g=groups.get(key);
-    if(!g){ g={code:key, profile:o.profile||'', description:o.description||'',
+    if(!g){ g={code:String(o.code||'?'), profile:o.profile||'', description:o.description||'',
                factories:new Set(), statuses:new Set(), orders:[],
                outstanding:0, b:new Array(mKeys.length).fill(0), noEta:0, inProd:0}; groups.set(key,g); }
     if(o.factory) g.factories.add(o.factory);
     g.statuses.add(orderStatus(o));
     g.outstanding += s.outstanding;
-    if(!g.profile && o.profile) g.profile=o.profile;
     if(!g.description && o.description) g.description=o.description;
     const {b,noEta,inProd}=orderBuckets(o,mKeys);
     b.forEach((x,i)=>g.b[i]+=x); g.noEta+=noEta; g.inProd+=inProd;
@@ -1930,7 +2142,9 @@ function arrivalsRows(){
     g.factory=[...g.factories].sort().join(', ');
     g.status=g.statuses.size===1?[...g.statuses][0]:'Mixed';
   });
-  rows.sort((a,b)=>String(a.code).localeCompare(String(b.code),undefined,{numeric:true}));
+  /* Colours of the same code sit together, in a stable order. */
+  rows.sort((a,b)=> String(a.code).localeCompare(String(b.code),undefined,{numeric:true})
+                 || String(a.profile).localeCompare(String(b.profile)));
   return {months,mKeys,rows};
 }
 
@@ -4818,6 +5032,7 @@ if('serviceWorker' in navigator){
 
 
 migrateContainerFields();
+document.documentElement.style.setProperty('--cg-row', contGrid.dense?'26px':'34px');
 applyTheme(); fillFactoryList(); go('dashboard'); renderBackupBanner();
 syncSetState(syncConfigured()?'idle':'off','');
 if(syncConfigured()) syncNow(false);
