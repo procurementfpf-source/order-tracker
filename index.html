@@ -622,17 +622,12 @@ td.cg-cno{font-weight:600;color:var(--txt)}
 td.cg-vessel{color:var(--txt);font-weight:500}
 .cg-chip{display:inline-block;font-size:9.5px;font-weight:700;letter-spacing:.4px;padding:1px 5px;
   border-radius:4px;background:var(--amber-bg);color:var(--amber);margin-left:5px;vertical-align:1px}
-/* Sticky identity columns: with this many columns you scroll sideways, and without
-   these pinned you lose track of which container a row belongs to. */
-.cg-stick{position:sticky;z-index:4;background:var(--panel)}
-th.cg-stick{z-index:6;background:var(--panel-2)}
-.cg-s0{left:0;width:34px;min-width:34px}
-.cg-s1{left:34px;width:30px;min-width:30px}
-.cg-s2{left:64px;min-width:134px;box-shadow:1px 0 0 var(--line)}
-tr.cg-row:hover .cg-stick{background:var(--panel-2)}
-tr.cg-row.sel .cg-stick{background:var(--accent-soft)}
-tr.cg-row.prov .cg-stick{background:var(--blue-bg)}
-tr.cg-row.prov.sel .cg-stick{background:var(--accent-soft)}
+/* These columns were pinned so they survived a sideways scroll, but a sticky cell
+   paints over its neighbours as the table moves under it, which read as distortion.
+   They are ordinary cells now — the classes only carry their widths. */
+.cg-s0{width:34px;min-width:34px}
+.cg-s1{width:30px;min-width:30px}
+.cg-s2{min-width:134px}
 tr.cg-row.open .caret svg{transform:rotate(90deg)}
 tr.cg-detail>td{padding:0;background:var(--bg-2);border-bottom:2px solid var(--line)}
 .cg-detail-inner{padding:10px 16px 12px 64px;white-space:normal}
@@ -650,7 +645,6 @@ tr.cg-detail>td{padding:0;background:var(--bg-2);border-bottom:2px solid var(--l
 .cg-pop .foot button{flex:1}
 @media print{
   .cg-wrap{max-height:none;overflow:visible;border:none;border-radius:0}
-  .cg-stick{position:static}
   table.cg th{position:static}
   .cg-noprint{display:none!important}
   table.cg td{white-space:normal}
@@ -1547,7 +1541,7 @@ function cgSave(){ try{ localStorage.setItem(CG_KEY, JSON.stringify(
    handful that fit an A4 page — the rest are dropped from a printout rather than
    spilling off the edge. */
 const CG_COLS=[
-  {k:'containerNo', t:'Container no', w:134, cls:'mono cg-cno', stick:'cg-s2', filter:true, print:true,
+  {k:'containerNo', t:'Container no', w:134, cls:'mono cg-cno', filter:true, print:true,
    val:c=>(c.containerNo||'').replace(/\s+/g,'')},
   {k:'vessel', t:'Vessel', w:172, cls:'cg-vessel', filter:true, print:true,
    cell:c=>esc(c.vessel||'—')+(c.transhipment?`<span class="cg-chip" title="Transhipment · ${fmtDateShort(c.tsEta)} → ${fmtDateShort(c.tsEtd)}${c.tsVessel?' · '+esc(c.tsVessel):''}">TS</span>`:'')},
@@ -1621,12 +1615,12 @@ function containersGridHTML(){
   const cols=cgVisibleCols(), rows=cgRows();
   const allSel = rows.length>0 && rows.every(c=>selectedContainers.has(c.id));
   const head =
-    `<th class="cg-stick cg-s0 cg-noprint"><div class="cg-th" style="justify-content:center">
+    `<th class="cg-s0 cg-noprint"><div class="cg-th" style="justify-content:center">
        <input type="checkbox" ${allSel?'checked':''} title="Select all" onclick="toggleSelectAllContainers()" style="width:14px;height:14px;margin:0"></div></th>`+
-    `<th class="cg-stick cg-s1 cg-noprint"></th>`+
+    `<th class="cg-s1 cg-noprint"></th>`+
     cols.map(col=>{
       const on=contGrid.colFilters[col.k]&&contGrid.colFilters[col.k].size;
-      return `<th class="${col.stick?'cg-stick '+col.stick:''} ${col.num?'num':''} ${col.print?'':'cg-noprint'}" style="min-width:${col.w}px">
+      return `<th class="${col.num?'num':''} ${col.print?'':'cg-noprint'}" style="min-width:${col.w}px">
         <div class="cg-th">
           <span class="lab" onclick="cgSort('${col.k}')">${esc(col.t)}</span>
           <span class="cg-sort">${contGrid.sort===col.k?(contGrid.dir>0?'▲':'▼'):''}</span>
@@ -1641,14 +1635,14 @@ function containersGridHTML(){
     const prov=!c.finalVessel && c.status!=='Delivered';
     const tds=cols.map(col=>{
       const raw=cgVal(c,col);
-      return `<td class="${col.cls||''} ${col.stick?'cg-stick '+col.stick:''} ${col.print?'':'cg-noprint'}" title="${esc(String(raw==null?'':raw))}">${
+      return `<td class="${col.cls||''} ${col.print?'':'cg-noprint'}" title="${esc(String(raw==null?'':raw))}">${
         col.cell? col.cell(c) : (esc(String(raw||''))||'—')}</td>`;
     }).join('');
     return `<tr class="cg-row ${selectedContainers.has(c.id)?'sel':''} ${prov?'prov':''} ${open?'open':''}" data-cc="${c.id}">
-      <td class="cg-stick cg-s0 cg-noprint" style="text-align:center">
+      <td class="cg-s0 cg-noprint" style="text-align:center">
         <input type="checkbox" title="Select for bulk edit" ${selectedContainers.has(c.id)?'checked':''}
           onclick="toggleContainerSelect('${c.id}')" style="width:14px;height:14px;margin:0"></td>
-      <td class="cg-stick cg-s1 cg-noprint">
+      <td class="cg-s1 cg-noprint">
         <button class="caret" title="Show contents" onclick="toggleContainer('${c.id}')">
           <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="m9 18 6-6-6-6"/></svg></button></td>
       ${tds}
