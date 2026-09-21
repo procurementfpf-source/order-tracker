@@ -1545,7 +1545,7 @@ let contGrid=(function(){
 })();
 contGrid.colFilters={};                       // filters are per-session, never persisted
 function cgSave(){ try{ localStorage.setItem(CG_KEY, JSON.stringify(
-  {sort:contGrid.sort, dir:contGrid.dir, hidden:contGrid.hidden, dense:contGrid.dense})); }catch(e){} }
+  {sort:contGrid.sort, dir:contGrid.dir, hidden:contGrid.hidden, dense:contGrid.dense, seen:contGrid.seen})); }catch(e){} }
 
 /* Every column below was already visible on the container card. print:true marks the
    handful that fit an A4 page — the rest are dropped from a printout rather than
@@ -1560,6 +1560,7 @@ const CG_COLS=[
   {k:'line', t:'Line', w:92, filter:true},
   {k:'containerType', t:'Type', w:74, filter:true},
   {k:'terminal', t:'Terminal', w:88, filter:true},
+  {k:'loadDate', t:'Load date', w:92, cls:'mono', filter:true, off:true, cell:c=>fmtDateShort(c.loadDate)},
   {k:'etd', t:'ETD', w:88, cls:'mono', filter:true, print:true, cell:c=>fmtDateShort(c.etd)},
   {k:'eta', t:'ETA', w:88, cls:'mono', filter:true, print:true, cell:c=>fmtDateShort(c.eta)},
   {k:'expected', t:'Expected', w:96, cls:'mono', print:true,
@@ -1579,6 +1580,17 @@ const CG_COLS=[
    cell:c=>c.status==='Delivered'?'<span class="badge-st st-green">Delivered</span>'
         :(c.finalVessel===false?'<span class="badge-st st-blue">Vessel TBC</span>':'<span class="minor">On water</span>')},
 ];
+/* Columns marked off:true are optional: they start hidden and appear in the Columns
+   menu. 'seen' records which columns this device has already been offered, so a new
+   optional column is hidden exactly once and never overrides a choice made later. */
+(function(){
+  const seen=new Set(contGrid.seen || CG_COLS.filter(c=>!c.off).map(c=>c.k));
+  const hidden=new Set(contGrid.hidden||[]);
+  let changed=!contGrid.seen;
+  CG_COLS.forEach(c=>{ if(!seen.has(c.k)){ seen.add(c.k); if(c.off) hidden.add(c.k); changed=true; } });
+  contGrid.seen=[...seen]; contGrid.hidden=[...hidden];
+  if(changed) cgSave();
+})();
 function cgVal(c,col){ return col.val? col.val(c) : (c[col.k]==null?'':c[col.k]); }
 function cgVisibleCols(){ const h=new Set(contGrid.hidden); return CG_COLS.filter(c=>!h.has(c.k)); }
 
@@ -1756,13 +1768,13 @@ function exportContainers(){
   const stat=c=>c.status==='Delivered'?'Delivered':(c.finalVessel===false?'Vessel TBC':'On water');
 
   /* -- sheet 1: stock by container -- */
-  const s1=[[ 'Factory','Container no','POL','Vessel','Line','Type','Terminal','ETD','ETA','Expected',
+  const s1=[[ 'Factory','Container no','POL','Vessel','Line','Type','Terminal','Load date','ETD','ETA','Expected',
               'Status','Code','Profile','Description','Order month','Qty' ].map(H)];
   let qtyTot=0;
   cs.forEach(c=>{
     const head=[ xcell(containerFactory(c)||''), xcell((c.containerNo||'').replace(/\s+/g,'')), xcell(c.pol||''),
       xcell(c.vessel||''), xcell(c.line||''), xcell(c.containerType||''), xcell(c.terminal||''),
-      xdate(c.etd), xdate(c.eta), xdate(exp(c)), xcell(stat(c)) ];
+      xdate(c.loadDate), xdate(c.etd), xdate(c.eta), xdate(exp(c)), xcell(stat(c)) ];
     const lines=c.lines||[];
     if(!lines.length){
       /* An empty container still gets a row, so it is not silently missing from the sheet. */
@@ -1777,10 +1789,10 @@ function exportContainers(){
     });
   });
   const s1DataEnd=s1.length;
-  s1.push([ xcell('Total',1), ...Array(14).fill(0).map(()=>xcell('',1)), xcell(qtyTot,3) ]);
+  s1.push([ xcell('Total',1), ...Array(15).fill(0).map(()=>xcell('',1)), xcell(qtyTot,3) ]);
 
   /* -- sheet 2: containers -- */
-  const s2=[[ 'Factory','Container no','POL','Vessel','Line','Type','Terminal','ETD','ETA','Expected',
+  const s2=[[ 'Factory','Container no','POL','Vessel','Line','Type','Terminal','Load date','ETD','ETA','Expected',
               'Transit (days)','Transhipment','Comment','Units','Status' ].map(H)];
   let unitTot=0;
   cs.forEach(c=>{
@@ -1788,19 +1800,19 @@ function exportContainers(){
     const t=transitDays(c);
     s2.push([ xcell(containerFactory(c)||''), xcell((c.containerNo||'').replace(/\s+/g,'')), xcell(c.pol||''),
       xcell(c.vessel||''), xcell(c.line||''), xcell(c.containerType||''), xcell(c.terminal||''),
-      xdate(c.etd), xdate(c.eta), xdate(exp(c)),
+      xdate(c.loadDate), xdate(c.etd), xdate(c.eta), xdate(exp(c)),
       t==null? xcell('') : xcell(t,2),
       xcell(c.transhipment? `${c.tsEta||''} → ${c.tsEtd||''}${c.tsVessel?' · '+c.tsVessel:''}` : ''),
       xcell(c.comment||''), xcell(u,2), xcell(stat(c)) ]);
   });
   const s2DataEnd=s2.length;
-  s2.push([ xcell('Total',1), ...Array(12).fill(0).map(()=>xcell('',1)), xcell(unitTot,3), xcell('',1) ]);
+  s2.push([ xcell('Total',1), ...Array(13).fill(0).map(()=>xcell('',1)), xcell(unitTot,3), xcell('',1) ]);
 
   downloadBytes(makeXlsxBook([
     { name:'Stock by container', aoa:s1, filter:true, filterEnd:s1DataEnd, first:true,
-      colW:[16,15,11,20,11,8,10,11,11,11,11,11,11,34,14,9] },
+      colW:[16,15,11,20,11,8,10,11,11,11,11,11,11,11,34,14,9] },
     { name:'Containers', aoa:s2, filter:true, filterEnd:s2DataEnd,
-      colW:[16,15,11,20,11,8,10,11,11,11,13,30,30,9,11] },
+      colW:[16,15,11,20,11,8,10,11,11,11,11,13,30,30,9,11] },
   ]), 'containers-'+todayISO()+'.xlsx');
   toast(`Excel downloaded — ${cs.length} container${cs.length===1?'':'s'}, ${s1DataEnd-1} row${s1DataEnd===2?'':'s'}`);
 }
