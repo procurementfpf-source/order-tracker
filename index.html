@@ -1521,6 +1521,7 @@ function viewContainers(){
     <div class="seg">${['On Water','Delivered','all'].map(s=>`<button class="${f.status===s?'active':''}" onclick="filters.containers.status='${s}';render()">${s==='all'?'All':s}</button>`).join('')}</div>
     <button class="btn sm" onclick="expandAllContainers()">Expand all</button>
     <button class="btn sm" onclick="collapseAllContainers()">Collapse all</button>
+    <button class="btn sm" onclick="exportContainers()" title="Exports what is on screen — filters apply">Export to Excel</button>
     <button class="btn sm" id="cgFullBtn" onclick="cgToggleFull()">${cgFull?'Exit full screen':'Full screen'}</button>
     <button class="btn sm" onclick="cgOpenCols(event)">Columns ▾</button>
     <button class="btn sm" onclick="cgToggleDense()" title="Row height">${contGrid.dense?'Comfortable':'Compact'}</button>
@@ -1740,6 +1741,69 @@ function cgClosePops(){
   const b=document.getElementById('cgCols'); if(b) b.classList.remove('open');
 }
 document.addEventListener('click',cgClosePops);
+
+/* ---------- CONTAINERS → EXCEL ----------
+   Exports what the screen is showing: the search box, the status tab and any column
+   funnels all apply, so filter first and the file matches.
+   Sheet 1 is the expanded view flattened — one row per stock item, with its container
+   repeated on every line so Excel can filter, sort, sum and pivot it.
+   Sheet 2 is one row per container, as on the grid. */
+function exportContainers(){
+  const cs=cgRows();
+  if(!cs.length){ toast('No containers to export — check your filters'); return; }
+  const H=s=>xcell(s,5);
+  const exp=c=>c.status==='Delivered'? c.deliveredAt : containerStats(c).expDeliv;
+  const stat=c=>c.status==='Delivered'?'Delivered':(c.finalVessel===false?'Vessel TBC':'On water');
+
+  /* -- sheet 1: stock by container -- */
+  const s1=[[ 'Factory','Container no','POL','Vessel','Line','Type','Terminal','ETD','ETA','Expected',
+              'Status','Code','Profile','Description','Order month','Qty' ].map(H)];
+  let qtyTot=0;
+  cs.forEach(c=>{
+    const head=[ xcell(containerFactory(c)||''), xcell((c.containerNo||'').replace(/\s+/g,'')), xcell(c.pol||''),
+      xcell(c.vessel||''), xcell(c.line||''), xcell(c.containerType||''), xcell(c.terminal||''),
+      xdate(c.etd), xdate(c.eta), xdate(exp(c)), xcell(stat(c)) ];
+    const lines=c.lines||[];
+    if(!lines.length){
+      /* An empty container still gets a row, so it is not silently missing from the sheet. */
+      s1.push([...head, xcell(''), xcell(''), xcell('(no stock on this container)'), xcell(''), xcell('')]);
+      return;
+    }
+    lines.forEach(l=>{
+      const o=order(l.orderId)||{};
+      qtyTot+=(l.qty||0);
+      s1.push([...head, xcell(o.code||''), xcell(o.profile||''), xcell(o.description||''),
+        xcell(o.period||''), xcell(l.qty||0,2) ]);
+    });
+  });
+  const s1DataEnd=s1.length;
+  s1.push([ xcell('Total',1), ...Array(14).fill(0).map(()=>xcell('',1)), xcell(qtyTot,3) ]);
+
+  /* -- sheet 2: containers -- */
+  const s2=[[ 'Factory','Container no','POL','Vessel','Line','Type','Terminal','ETD','ETA','Expected',
+              'Transit (days)','Transhipment','Comment','Units','Status' ].map(H)];
+  let unitTot=0;
+  cs.forEach(c=>{
+    const u=containerStats(c).units; unitTot+=u;
+    const t=transitDays(c);
+    s2.push([ xcell(containerFactory(c)||''), xcell((c.containerNo||'').replace(/\s+/g,'')), xcell(c.pol||''),
+      xcell(c.vessel||''), xcell(c.line||''), xcell(c.containerType||''), xcell(c.terminal||''),
+      xdate(c.etd), xdate(c.eta), xdate(exp(c)),
+      t==null? xcell('') : xcell(t,2),
+      xcell(c.transhipment? `${c.tsEta||''} → ${c.tsEtd||''}${c.tsVessel?' · '+c.tsVessel:''}` : ''),
+      xcell(c.comment||''), xcell(u,2), xcell(stat(c)) ]);
+  });
+  const s2DataEnd=s2.length;
+  s2.push([ xcell('Total',1), ...Array(12).fill(0).map(()=>xcell('',1)), xcell(unitTot,3), xcell('',1) ]);
+
+  downloadBytes(makeXlsxBook([
+    { name:'Stock by container', aoa:s1, filter:true, filterEnd:s1DataEnd, first:true,
+      colW:[16,15,11,20,11,8,10,11,11,11,11,11,11,34,14,9] },
+    { name:'Containers', aoa:s2, filter:true, filterEnd:s2DataEnd,
+      colW:[16,15,11,20,11,8,10,11,11,11,13,30,30,9,11] },
+  ]), 'containers-'+todayISO()+'.xlsx');
+  toast(`Excel downloaded — ${cs.length} container${cs.length===1?'':'s'}, ${s1DataEnd-1} row${s1DataEnd===2?'':'s'}`);
+}
 
 function containersCountText(){
   const f=filters.containers, cs=cgRows();
@@ -4495,39 +4559,68 @@ function xdate(d){ if(!d) return xcell(''); const x=(typeof d==='string')?new Da
   return { v:serial, t:'n', s:6 }; }
 function xmlEsc(s){ return String(s).replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m])); }
 function colLetter(n){ let s=''; n++; while(n>0){ const m=(n-1)%26; s=String.fromCharCode(65+m)+s; n=Math.floor((n-1)/26); } return s; }
-function makeXlsx(sheetName, aoa, colW){
+/* One workbook, any number of sheets. makeXlsx() is kept as a one-sheet wrapper so
+   every existing export behaves exactly as before. filter:true adds Excel's
+   AutoFilter dropdowns to the header row. */
+function makeXlsx(sheetName, aoa, colW){ return makeXlsxBook([{name:sheetName, aoa, colW}]); }
+function xlsxSheetName(n, used){
+  let b=String(n||'Sheet').replace(/[\[\]:*?\/\\]/g,' ').trim().slice(0,31)||'Sheet', out=b, i=2;
+  while(used.has(out.toLowerCase())){ const sfx=' ('+(i++)+')'; out=b.slice(0,31-sfx.length)+sfx; }
+  used.add(out.toLowerCase()); return out;
+}
+function makeXlsxBook(sheets){
   const enc=new TextEncoder();
-  // worksheet
-  let dim='A1:'+colLetter(Math.max(0,(aoa[0]?aoa[0].length:1)-1))+aoa.length;
-  let cols='';
-  if(colW&&colW.length){ cols='<cols>'+colW.map((w,i)=>`<col min="${i+1}" max="${i+1}" width="${w}" customWidth="1"/>`).join('')+'</cols>'; }
-  let rowsXml='';
-  aoa.forEach((row,r)=>{ let cells='';
-    row.forEach((c,ci)=>{ const ref=colLetter(ci)+(r+1); const s=c.s?` s="${c.s}"`:'';
-      if(c.t==='n') cells+=`<c r="${ref}"${s}><v>${c.v}</v></c>`;
-      else cells+=`<c r="${ref}"${s} t="inlineStr"><is><t xml:space="preserve">${xmlEsc(c.v)}</t></is></c>`;
+  const used=new Set();
+  const sheetXml=sheets.map(sh=>{
+    const aoa=sh.aoa||[], colW=sh.colW;
+    const lastCol=colLetter(Math.max(0,(aoa[0]?aoa[0].length:1)-1));
+    const dim='A1:'+lastCol+Math.max(1,aoa.length);
+    let cols='';
+    if(colW&&colW.length){ cols='<cols>'+colW.map((w,i)=>`<col min="${i+1}" max="${i+1}" width="${w}" customWidth="1"/>`).join('')+'</cols>'; }
+    let rowsXml='';
+    aoa.forEach((row,r)=>{ let cells='';
+      row.forEach((c,ci)=>{ const ref=colLetter(ci)+(r+1); const st=c.s?` s="${c.s}"`:'';
+        if(c.t==='n') cells+=`<c r="${ref}"${st}><v>${c.v}</v></c>`;
+        else cells+=`<c r="${ref}"${st} t="inlineStr"><is><t xml:space="preserve">${xmlEsc(c.v)}</t></is></c>`;
+      });
+      rowsXml+=`<row r="${r+1}">${cells}</row>`;
     });
-    rowsXml+=`<row r="${r+1}">${cells}</row>`;
+    /* AutoFilter covers the data rows only, so a totals row at the bottom stays put
+       instead of being sorted into the middle of the list. */
+    const dataEnd = sh.filterEnd || aoa.length;
+    const af = sh.filter && aoa.length>1 ? `<autoFilter ref="A1:${lastCol}${dataEnd}"/>` : '';
+    return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="${dim}"/><sheetViews><sheetView workbookViewId="0"${sh.first?' tabSelected="1"':''}><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews><sheetFormatPr defaultRowHeight="15"/>${cols}<sheetData>${rowsXml}</sheetData>${af}</worksheet>`;
   });
-  const sheet=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="${dim}"/><sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews><sheetFormatPr defaultRowHeight="15"/>${cols}<sheetData>${rowsXml}</sheetData></worksheet>`;
+  const names=sheets.map(sh=>xlsxSheetName(sh.name,used));
   const styles=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><numFmts count="3"><numFmt numFmtId="164" formatCode="#,##0"/><numFmt numFmtId="165" formatCode="yyyy-mm-dd"/><numFmt numFmtId="166" formatCode="#,##0.00"/></numFmts><fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="8"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/><xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/><xf numFmtId="164" fontId="1" fillId="0" borderId="0" xfId="0" applyNumberFormat="1" applyFont="1"/><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/><xf numFmtId="165" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/><xf numFmtId="166" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/></cellXfs></styleSheet>`;
   const wb=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="${xmlEsc(sheetName).slice(0,31)}" sheetId="1" r:id="rId1"/></sheets></workbook>`;
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>${
+    names.map((n,i)=>`<sheet name="${xmlEsc(n)}" sheetId="${i+1}" r:id="rId${i+1}"/>`).join('')}</sheets>${
+    sheets.some(sh=>sh.filter)?`<definedNames>${sheets.map((sh,i)=>{
+      if(!sh.filter||!sh.aoa||sh.aoa.length<2) return '';
+      const lc=colLetter(Math.max(0,sh.aoa[0].length-1)); const de=sh.filterEnd||sh.aoa.length;
+      return `<definedName name="_xlnm._FilterDatabase" localSheetId="${i}" hidden="1">'${xmlEsc(names[i]).replace(/'/g,"''")}'!$A$1:$${lc}$${de}</definedName>`;
+    }).join('')}</definedNames>`:''}</workbook>`;
+  const n=sheets.length;
   const wbRels=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`;
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${
+    names.map((_,i)=>`<Relationship Id="rId${i+1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i+1}.xml"/>`).join('')
+  }<Relationship Id="rId${n+1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`;
   const rels=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>`;
   const ct=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>`;
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>${
+    names.map((_,i)=>`<Override PartName="/xl/worksheets/sheet${i+1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join('')
+  }<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>`;
   const files=[
     {name:'[Content_Types].xml', data:enc.encode(ct)},
     {name:'_rels/.rels', data:enc.encode(rels)},
     {name:'xl/workbook.xml', data:enc.encode(wb)},
     {name:'xl/_rels/workbook.xml.rels', data:enc.encode(wbRels)},
     {name:'xl/styles.xml', data:enc.encode(styles)},
-    {name:'xl/worksheets/sheet1.xml', data:enc.encode(sheet)},
+    ...sheetXml.map((x,i)=>({name:`xl/worksheets/sheet${i+1}.xml`, data:enc.encode(x)})),
   ];
   return zipStore(files);
 }
