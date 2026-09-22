@@ -1370,7 +1370,9 @@ function openPoModal(key, focus){
             qty:o.orderQty, price:(o.price!=null&&o.price!=='')?o.price:null, packed:s.packed, delivered:s.delivered}; }) };
   const uniq=k=>[...new Set(g.orders.map(o=>o[k]||''))];
   const pos=uniq('po'), months=uniq('periodISO'), etds=uniq('plannedEtd'), etas=uniq('plannedEta');
-  const mixed=[pos.length>1?'PO number':'',months.length>1?'order month':'',etds.length>1?'planned ETD':'',etas.length>1?'planned ETA':''].filter(Boolean);
+  const fps=uniq('fpConfirmed'), pls=uniq('supplierPlaced');
+  const mixed=[pos.length>1?'PO number':'',months.length>1?'order month':'',etds.length>1?'planned ETD':'',etas.length>1?'planned ETA':'',
+    fps.length>1?'date confirmed (FP)':'',pls.length>1?'date placed with supplier':''].filter(Boolean);
   const ov=document.getElementById('overlay');
   ov.innerHTML=`<div class="modal wide"><div class="modal-head">
     <div><h3>Edit PO</h3><p>Change the PO details, adjust existing lines, or add new ones</p></div>
@@ -1381,6 +1383,10 @@ function openPoModal(key, focus){
       <div class="field row">
         <div><label>PO number</label><input id="po_po" value="${esc(pos[0]||'')}" placeholder="e.g. PO-1042"></div>
         <div><label>Order month <span class="req">*</span></label><input type="month" id="po_month" value="${esc(months[0]||'')}"></div>
+      </div>
+      <div class="field row">
+        <div><label>Order confirmed (FP)</label><input type="date" id="po_fpconf" value="${esc(fps[0]||'')}"></div>
+        <div><label>Placed with supplier</label><input type="date" id="po_placed" value="${esc(pls[0]||'')}"></div>
       </div>
       <div class="field row">
         <div><label>Planned ETD</label><input type="date" id="po_petd" value="${esc(etds[0]||'')}"></div>
@@ -1464,6 +1470,7 @@ function savePoEdit(){
 
   const po=val('po_po').trim();
   const plannedEtd=val('po_petd')||null, plannedEta=val('po_peta')||null;
+  const fpConfirmed=val('po_fpconf')||null, supplierPlaced=val('po_placed')||null;
   const periodLabel=new Date(month+'-01T00:00:00').toLocaleDateString('en-GB',{month:'long',year:'numeric'});
   const key=poEdit.key;
 
@@ -1476,10 +1483,12 @@ function savePoEdit(){
   poEdit.existing.forEach(l=>{ const o=order(l.id); if(!o) return;
     o.orderGroup=key; o.po=po; o.period=periodLabel; o.periodISO=month;
     o.plannedEtd=plannedEtd; o.plannedEta=plannedEta;
+    o.fpConfirmed=fpConfirmed; o.supplierPlaced=supplierPlaced;
     o.orderQty=+l.qty; o.price=(l.price!=null&&l.price!=='')?+l.price:null; });
   // append any new lines to this same PO
   orderLines.forEach(l=>{ const p=productByCode(l.code);
     state.orders.push({ id:uid('o'), createdAt:Date.now(), orderGroup:key, period:periodLabel, periodISO:month, po, plannedEtd, plannedEta,
+      fpConfirmed, supplierPlaced,
       code:l.code, description:l.description||(p?p.description:'')||'', profile:l.profile||'',
       price:(l.price!=null&&l.price!=='')?+l.price:(p&&p.price!=null&&p.price!==''?+p.price:null),
       rmbPrice:(l.rmbPrice!=null&&l.rmbPrice!=='')?+l.rmbPrice:(p&&p.rmbPrice!=null&&p.rmbPrice!==''?+p.rmbPrice:null),
@@ -1918,6 +1927,16 @@ function migrateContainerFields(){
   return n>0;
 }
 
+/* Earliest load date across every container carrying this order — mirrors Actual ETD. */
+function orderLoadDate(o){
+  let best=null;
+  (state.containers||[]).forEach(c=>{
+    if(!c.loadDate) return;
+    if(!(c.lines||[]).some(l=>l.orderId===o.id)) return;
+    if(!best || c.loadDate<best) best=c.loadDate;
+  });
+  return best;
+}
 /* Earliest ETD across every container carrying this order — the day its stock
    actually started moving. Later containers on the same order do not change it. */
 function orderActualEtd(o){
@@ -2136,14 +2155,15 @@ function exportBuyer(){
   if(sel) rows=rows.filter(r=>r.o.period===sel);
   rows.sort((a,b)=> String(a.o.factory||'~').localeCompare(String(b.o.factory||'~')) || (a.o.period||'').localeCompare(b.o.period||'') || String(a.o.code).localeCompare(String(b.o.code)));
   if(!rows.length){ toast('Nothing to export for '+(sel||'this month')); return; }
-  const H=['Factory','Month','Code','Profile','Description','Ordered','Shipped','O/S','Planned ETD','Actual ETD','Planned ETA','Exp delivery','Late days','Status','Comment'];
+  const H=['Factory','Month','Code','Profile','Description','Ordered','Shipped','O/S','Confirmed (FP)','Placed with supplier','Load date','Planned ETD','Actual ETD','Planned ETA','Exp delivery','Late days','Status','Comment'];
   const aoa=[H.map(h=>xcell(h,5))];
   rows.forEach(({o,s,st})=>{ const late=buyerLate(o); const exp=buyerExpDeliv(o);
     aoa.push([ xcell(o.factory||''),xcell(o.period||''),xcell(o.code||''),xcell(o.profile||''),xcell(o.description||''),
       xcell(o.orderQty,2),xcell(s.packed,2),xcell(s.outstanding,2),
+      xdate(o.fpConfirmed), xdate(o.supplierPlaced), xdate(orderLoadDate(o)),
       o.plannedEtd?xdate(o.plannedEtd):xcell(''), orderActualEtd(o)?xdate(orderActualEtd(o)):xcell(''),
       o.plannedEta?xdate(o.plannedEta):xcell(''), exp?xdate(exp):xcell(''), late!=null?xcell(late,2):xcell(''), xcell(st), xcell(o.comment||'') ]); });
-  downloadBytes(makeXlsx('Buyer Report', aoa, [13,11,11,10,34,9,9,8,12,12,12,12,9,13,30]), 'buyer-report-'+(filters.buyer.month?filters.buyer.month.replace(/\s+/g,'-'):todayISO())+'.xlsx');
+  downloadBytes(makeXlsx('Buyer Report', aoa, [13,11,11,10,34,9,9,8,13,14,12,12,12,12,12,9,13,30]), 'buyer-report-'+(filters.buyer.month?filters.buyer.month.replace(/\s+/g,'-'):todayISO())+'.xlsx');
   toast('Excel file downloaded');
 }
 function exportArrivals(){
@@ -3159,9 +3179,10 @@ function viewBuyer(){
     <div class="tbl-wrap">
     ${any?`<table class="buyer-tbl"><thead><tr><th>Code</th><th>Profile</th><th>Description</th>
       <th class="num">Ordered</th><th class="num">Shipped</th><th class="num">O/S</th>
+      <th>Confirmed (FP)</th><th>Placed w/ supplier</th><th>Load date</th>
       <th>Planned ETD</th><th>Actual ETD</th><th>Planned ETA</th><th>Exp. delivery</th><th class="num">Late</th><th>Status</th><th>Comment</th></tr></thead>
     <tbody>${keys.map(k=>{ const list=groups[k].sort((a,b)=>(a.o.period||'').localeCompare(b.o.period||'')||String(a.o.code).localeCompare(String(b.o.code)));
-      return `<tr class="group-row"><td colspan="13">${esc(k)} — ${list.length} line${list.length===1?'':'s'}</td></tr>`+
+      return `<tr class="group-row"><td colspan="16">${esc(k)} — ${list.length} line${list.length===1?'':'s'}</td></tr>`+
       list.map(({o,s,st})=>{ const cls=statusClass(st).replace('st-','b-'); const late=buyerLate(o); const exp=buyerExpDeliv(o);
         const aEtd=orderActualEtd(o);
         return `<tr class="brow ${cls} clickable" onclick="openOrderDetail('${o.id}')">
@@ -3169,6 +3190,9 @@ function viewBuyer(){
         <td class="desc-cell" title="${esc(o.description)}">${esc(o.description)}</td>
         <td class="num mono">${nf(o.orderQty)}</td><td class="num mono">${nf(s.packed)}</td>
         <td class="num mono"><b>${nf(s.outstanding)}</b></td>
+        <td class="mono">${fmtDateShort(o.fpConfirmed)}</td>
+        <td class="mono">${fmtDateShort(o.supplierPlaced)}</td>
+        <td class="mono">${fmtDateShort(orderLoadDate(o))}</td>
         <td class="mono">${o.plannedEtd?fmtDateShort(new Date(o.plannedEtd+'T00:00:00')):'—'}</td>
         <td class="mono">${aEtd?fmtDateShort(new Date(aEtd+'T00:00:00')):'—'}</td>
         <td class="mono">${o.plannedEta?fmtDateShort(new Date(o.plannedEta+'T00:00:00')):'—'}</td>
@@ -3753,6 +3777,10 @@ function openOrderModal(editId){
           <div><label>PO number</label><input id="o_po" value="${esc(o.po||'')}" placeholder="e.g. PO-1042"></div>
         </div>
         <div class="field row">
+          <div><label>Order confirmed (FP)</label><input type="date" id="o_fpconf" value="${o.fpConfirmed||''}"></div>
+          <div><label>Placed with supplier</label><input type="date" id="o_placed" value="${o.supplierPlaced||''}"></div>
+        </div>
+        <div class="field row">
           <div><label>Planned ETD</label><input type="date" id="o_petd" value="${o.plannedEtd||''}"></div>
           <div><label>Planned ETA</label><input type="date" id="o_peta" value="${o.plannedEta||''}"></div>
         </div>
@@ -3777,6 +3805,10 @@ function openOrderModal(editId){
       <div class="field row">
         <div><label>Order month <span class="req">*</span></label><input type="month" id="o_month" value="${monthVal}"></div>
         <div><label>PO number</label><input id="o_po" placeholder="e.g. PO-1042"></div>
+      </div>
+      <div class="field row">
+        <div><label>Order confirmed (FP)</label><input type="date" id="o_fpconf"></div>
+        <div><label>Placed with supplier</label><input type="date" id="o_placed"></div>
       </div>
       <div class="field row">
         <div><label>Planned ETD</label><input type="date" id="o_petd"></div>
@@ -3954,10 +3986,12 @@ function saveOrderBatch(){
   if(!orderLines.length){ toast('Add at least one line'); return; }
   const po=val('o_po').trim();
   const plannedEtd=val('o_petd')||null, plannedEta=val('o_peta')||null;
+  const fpConfirmed=val('o_fpconf')||null, supplierPlaced=val('o_placed')||null;
   const periodLabel=new Date(month+'-01T00:00:00').toLocaleDateString('en-GB',{month:'long',year:'numeric'});
   const grp=uid('grp');
   orderLines.forEach(l=>{ const p=productByCode(l.code);
     state.orders.push({ id:uid('o'), createdAt:Date.now(), orderGroup:grp, period:periodLabel, periodISO:month, po, plannedEtd, plannedEta,
+      fpConfirmed, supplierPlaced,
       code:l.code, description:l.description||(p?p.description:'')||'', profile:l.profile||'',
       price:(l.price!=null&&l.price!=='')?+l.price:(p&&p.price!=null&&p.price!==''?+p.price:null),
       rmbPrice:(l.rmbPrice!=null&&l.rmbPrice!=='')?+l.rmbPrice:(p&&p.rmbPrice!=null&&p.rmbPrice!==''?+p.rmbPrice:null),
@@ -3978,6 +4012,7 @@ function saveOrder(id){
   const rmRaw=val('o_rmb').trim(); const rmbPrice = rmRaw===''? (p&&p.rmbPrice!=null&&p.rmbPrice!==''?+p.rmbPrice:null) : (isFinite(+rmRaw)?+rmRaw:null);
   const data={ period:periodLabel, periodISO:month, po:val('o_po').trim(), code, description:desc, price, rmbPrice,
     plannedEtd:val('o_petd')||null, plannedEta:val('o_peta')||null,
+    fpConfirmed:val('o_fpconf')||null, supplierPlaced:val('o_placed')||null,
     profile, factory:(p?p.factory:'')||order(id).factory||'', orderQty:qty, comment:val('o_comment').trim() };
   Object.assign(order(id), data); save(); closeModal(); render(); fillFactoryList(); toast('Order updated');
 }
@@ -4004,6 +4039,8 @@ function openOrderDetail(id){
         <div class="d-cell"><div class="dl">Order month</div><div class="dv">${esc(o.period)}</div></div>
         <div class="d-cell"><div class="dl">PO number</div><div class="dv mono">${esc(o.po||'—')}</div></div>
         <div class="d-cell"><div class="dl">Factory</div><div class="dv">${esc(o.factory||'—')}</div></div>
+        <div class="d-cell"><div class="dl">Confirmed (FP)</div><div class="dv mono">${fmtDateShort(o.fpConfirmed)}</div></div>
+        <div class="d-cell"><div class="dl">Placed with supplier</div><div class="dv mono">${fmtDateShort(o.supplierPlaced)}</div></div>
         <div class="d-cell"><div class="dl">Planned ETD</div><div class="dv mono">${o.plannedEtd?fmtDateShort(new Date(o.plannedEtd+'T00:00:00')):'—'}</div></div>
         <div class="d-cell"><div class="dl">Planned ETA</div><div class="dv mono">${o.plannedEta?fmtDateShort(new Date(o.plannedEta+'T00:00:00')):'—'}</div></div>
         <div class="d-cell"><div class="dl">Ordered</div><div class="dv mono">${nf(o.orderQty)}</div></div>
