@@ -3451,6 +3451,7 @@ function viewProducts(){
     ${anyColFilter?'<button class="btn" onclick="clearAllColFilters()">Clear column filters</button>':''}
     <button class="btn" onclick="exportProducts()"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6z"/><path d="M14 2v6h6"/><path d="M9 13l2 3 2-3 2 3" stroke-linecap="round"/></svg> Export to Excel</button>
     <button class="btn" onclick="toggleProdPaste()"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/></svg> Paste from Excel</button>
+    <button class="btn" onclick="openPriceImport()" title="Update prices, add new products, and drop ones no longer carried">Apply price list</button>
     <button class="btn primary" onclick="productAdd()"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> Add product</button>
   </div>
   <textarea id="prodPaste" class="paste-area no-print" style="display:none" onpaste="setTimeout(applyProductPaste,40)" placeholder="Copy from Excel and paste here (Ctrl+V). Columns: Code · Description · Profiles · Factory · Price (ZAR) · Price (RMB) — a header row is recognised automatically."></textarea>
@@ -3749,7 +3750,7 @@ function parseProductPaste(text){
     if(dC<0&&(h==='description'||h==='desc'))dC=i;
     if(prC<0&&['profile','profiles','colour','color','colours','colors'].includes(h))prC=i;
     if(fC<0&&h==='factory')fC=i;
-    if(pC<0&&(h==='price'||h==='cost'))pC=i;
+    if(pC<0&&['price','cost','zar','zarprice','pricezar','rand','sell','sellingprice'].includes(h))pC=i;
     if(rC<0&&['rmb','rmbprice','pricermb','cny','yuan'].includes(h))rC=i; }); }
   if(cC<0){ // positional fallback: code first, then sensible defaults by column count
     const n=grid[start]?grid[start].length:0; cC=0;
@@ -3771,6 +3772,170 @@ function parseProductPaste(text){
   }
   return {rows:out};
 }
+/* Much Better price list — October 2026, as supplied. [code, description, RMB, ZAR]
+   Replace or delete this block when a newer list arrives; the paste box handles
+   any future list without a code change. */
+const PRICE_LIST_OCT_2026 = [["10-191", "K/UNIT ANTARCTIC + SINK  8219 5PC   (FREE ASSEMBLY)", 770.0, 3070.0], ["10-204", "K/UNIT ROME 3PC MF838-7 (FREE ASSEMBLY)", 455.0, 1945.0], ["10-207", "K/UNIT STEEL 3PC", 650.0, 2310.0], ["10-208", "K/UNIT STEEL BASE +SINK", 340.0, 1260.0], ["10-214", "K/UNIT NARA 2DR BASE+SINK", 286.0, 1025.0], ["10-215", "K/UNIT NARA FREESTANDING", 574.0, 2110.0], ["11-378", "COFFEE TABLE DOPPIO 2PC  (D.I.Y)", 78.0, 290.0], ["11-386", "COFFEE TABLE MOCACHINO 3PC (D.I.Y)", 150.0, 575.0], ["11-387", "COFFEE TABLE CHAI (D.I.Y)", 125.0, 505.0], ["11-391", "COFFEE TABLE ORB (D.I.Y)", 295.0, 1660.0], ["11-395", "COFFEE TABLE NAPOLI  (D.I.Y)", 387.0, 1420.0], ["11-396", "COFFEE TABLE DOLCE 2PC  (D.I.Y)", 355.0, 1205.0], ["11-398", "COFFEE TABLE LUXE  (D.I.Y)", 194.0, 735.0], ["11-399", "COFFEE TABLE AMARETTI (D.I.Y)", 298.0, 1115.0], ["11-400", "COFFEE TABLE NARA (D.I.Y)", 185.0, 650.0], ["11-401", "COFFEE TABLE NARA SIDE TABLE (D.I.Y)", 54.0, 160.0], ["11-402", "COFFEE TABLE VENEZIA (D.I.Y)", 92.0, 350.0], ["11-403", "COFFEE TABLE CORTADO 2PC (D.I.Y)", 205.0, 860.0], ["11-404", "COFFEE TABLE ARONDIO 2PC (D.I.Y)", 84.0, 425.0], ["11-405", "COFFEE TABLE BIANCO (D.I.Y)", 185.0, 630.0], ["11-406", "COFFEE TABLE CARAFE (D.I.Y)", 150.0, 550.0], ["11-407", "COFFEE TABLE ROMANO GLASS 2PC  (D.I.Y)", 115.0, 420.0], ["1-274", "WARDROBE ROME  4DR+6DRW+MIRRORS 5566-4 (FREE ASSEMBLY)", 325.0, 1350.0], ["1-275", "WARDROBE ROME  3DR+3DRW+MIRROR 5566-3 (FREE ASSEMBLY)", 245.0, 930.0], ["1-283", "WARDROBE NARA 6DR (FREE ASSEMBLY)", 688.0, 2680.0], ["1-284", "WARDROBE NARA 4DR (FREE ASSEMBLY)", 410.0, 1785.0], ["1-285", "WARDROBE NARA 3DR (FREE ASSEMBLY)", 330.0, 1365.0], ["3-489", "T.V UNIT MAI (D.I.Y)", 510.0, 2100.0], ["3-492", "T.V UNIT NARA (D.I.Y)", 240.0, 880.0], ["3-493", "T.V UNIT VALENTINA (D.I.Y)", 90.0, 765.0], ["40-1154", "CHAIR CHLOE", 33.0, 200.0], ["40-1173", "BAR STOOL NORA", 135.0, 550.0], ["40-1183", "BAR STOOL CEDAR (D.I.Y)", 110.0, 435.0], ["40-1184", "BAR STOOL PEARL (D.I.Y)", 92.0, 405.0], ["40-1186", "MIRROR CHANEL (D.I.Y)", 52.0, 260.0], ["40-1188", "MIRROR MANHATTAN (D.I.Y)", 40.0, 170.0], ["40-1208", "DESK TUSCAN FOLDING", 72.0, 335.0], ["40-1209", "DESK TUSCAN", 85.0, 470.0], ["40-1212", "MIRROR FLORIDA SLIDING (D.I.Y)", 150.0, 645.0], ["40-1214", "MIRROR VENICE 22-01 42*151", 41.0, 210.0], ["40-1216", "MIRROR HALO", 77.0, 300.0], ["40-1221", "MIRROR LUCCA (D.I.Y) ( BOX)", 73.0, 535.0], ["40-1222", "CATERING TABLE (D.I.Y)", 130.0, 380.0], ["40-1231", "DESK NARA (D.I.Y)", 155.0, 580.0], ["40-1232", "DINING SERVER NARA", 220.0, 765.0], ["40-1233", "SHOE CABINET NARA", 185.0, 690.0], ["40-1234", "COAT HANGER NARA", 180.0, 651.0], ["40-1235", "D/ROOM CHAIR ALICE", 70.0, 315.0], ["40-1236", "CHAIR LUCY FOLDING", 29.0, 150.0], ["40-1239", "BAR STOOL BIANCA (D.I.Y)", 74.0, 360.0], ["40-1242", "BAR STOOL SONYA (D.I.Y) (1 BOX)", 72.0, 345.0], ["40-1243", "CHAIR ESTER (D.I.Y)", 41.0, 240.0], ["40-1244", "MIRROR MELBOURNE (D.I.Y)", 120.0, 505.0], ["40-1245", "MIRROR CHICAGO (D.I.Y)", 140.0, 560.0], ["40-1246", "MIRROR AUSTIN (D.I.Y)", 65.0, 245.0], ["40-1247", "MIRROR OAKLAND (D.I.Y)", 72.0, 295.0], ["40-181", "BAR STOOL DAKOTA H-100 (D.I.Y)", 74.0, 355.0], ["4-044", "CHEST OF DRAW ROME MF05(5DRW+DR)", 195.0, 820.0], ["4-048", "CHEST OF DRAW NARA (1 BOX)", 235.0, 935.0], ["40-616", "CATERING TABLE FOLDING SS006F-I  (D.I.Y)", 130.0, 380.0], ["5-199", "D/SUITE CAMILLA 5PC", 195.0, 850.0], ["5-200", "D/SUITE CAMILLA 7PC", 295.0, 1280.0], ["5-204", "D/SUITE BURSA 5PC", 250.0, 1100.0], ["5-205", "D/SUITE BURSA 7PC", 360.0, 1520.0], ["5-209", "D/SUITE ALANA 7PC", 635.0, 2540.0], ["8-484", "B/SUITE DBL BUNK BED (D.I.Y)", 265.0, 1020.0], ["8-493", "Pedastal Nara", 125.0, 420.0], ["8-494", "Dresser NARA", 195.0, 735.0], ["8-497", "Pedastal Rome", 75.0, 260.0]];
+
+/* ---------- PRICE LIST IMPORT ----------
+   One place to apply a new price list: update and add products, drop products the new
+   list no longer carries, and optionally reprice existing orders. Everything is
+   previewed before anything is written. */
+let priceImport=null;
+function openPriceImport(){
+  priceImport={rows:[], removeUnlisted:false, reprice:false, targets:new Set()};
+  const ov=document.getElementById('overlay');
+  ov.innerHTML=`<div class="modal wide"><div class="modal-head">
+      <div><h3>Apply a price list</h3><p>Preview everything before it is written. Nothing changes until you press Apply.</p></div>
+      <div class="spacer"></div><button class="close-x" onclick="closeModal()">&#10005;</button></div>
+    <div class="modal-body">
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
+        <button class="btn sm primary" onclick="loadEmbeddedPriceList()">Load October 2026 list (${PRICE_LIST_OCT_2026.length} items)</button>
+        <span class="minor" style="font-size:12px">or paste from Excel below — Code, Description, RMB, ZAR</span>
+      </div>
+      <textarea id="piPaste" class="paste-area" style="display:block;min-height:90px"
+        placeholder="Paste here (Ctrl+V). A header row is recognised automatically."
+        onpaste="setTimeout(readPriceImportPaste,40)" oninput="setTimeout(readPriceImportPaste,250)"></textarea>
+      <div id="piPreview" style="margin-top:12px"></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" onclick="closeModal()">Cancel</button>
+      <button class="btn primary" id="piApply" disabled onclick="applyPriceImport()">Apply</button>
+    </div></div>`;
+  ov.classList.add('open');
+  renderPriceImport();
+}
+function loadEmbeddedPriceList(){
+  priceImport.rows=PRICE_LIST_OCT_2026.map(r=>({code:String(r[0]).trim(), description:r[1], rmbPrice:r[2], price:r[3]}));
+  renderPriceImport();
+}
+function readPriceImportPaste(){
+  const ta=document.getElementById('piPaste'); if(!ta||!ta.value.trim()){ priceImport.rows=[]; renderPriceImport(); return; }
+  const res=parseProductPaste(ta.value);
+  priceImport.rows = (res && !res.error && res.rows) ? res.rows.filter(r=>r.code) : [];
+  renderPriceImport();
+}
+/* A product may only be dropped if nothing refers to its code. Orders are the only
+   thing that do — containers point at orders, not at products. */
+function priceImportPlan(){
+  const rows=priceImport.rows;
+  const key=c=>String(c||'').trim().toUpperCase();
+  const listed=new Map(rows.map(r=>[key(r.code), r]));
+  const usedCodes=new Set(state.orders.map(o=>key(o.code)));
+  const update=[], add=[], removable=[], keep=[];
+  rows.forEach(r=>{
+    const ex=state.products.find(p=>key(p.code)===key(r.code));
+    if(ex){ const changed=(r.price!=null&&Number(ex.price)!==Number(r.price))||(r.rmbPrice!=null&&Number(ex.rmbPrice)!==Number(r.rmbPrice));
+      update.push({r, ex, changed}); }
+    else add.push(r);
+  });
+  state.products.forEach(p=>{
+    if(listed.has(key(p.code))) return;
+    (usedCodes.has(key(p.code))? keep : removable).push(p);
+  });
+  return {update, add, removable, keep,
+          changed:update.filter(u=>u.changed)};
+}
+/* Month + factory combinations that actually exist, so the repricing targets are
+   drawn from the data rather than typed in. */
+function priceImportGroups(){
+  const m=new Map();
+  state.orders.forEach(o=>{
+    const k=(o.periodISO||o.period||'?')+'\u0000'+(o.factory||'(no factory)');
+    if(!m.has(k)) m.set(k,{key:k, period:o.period||o.periodISO||'?', iso:o.periodISO||'', factory:o.factory||'(no factory)', n:0});
+    m.get(k).n++;
+  });
+  return [...m.values()].sort((a,b)=> String(b.iso).localeCompare(String(a.iso)) || a.factory.localeCompare(b.factory));
+}
+function repriceEffect(){
+  const key=c=>String(c||'').trim().toUpperCase();
+  const listed=new Map(priceImport.rows.map(r=>[key(r.code), r]));
+  let changed=0, same=0, notListed=0;
+  state.orders.forEach(o=>{
+    const k=(o.periodISO||o.period||'?')+'\u0000'+(o.factory||'(no factory)');
+    if(!priceImport.targets.has(k)) return;
+    const r=listed.get(key(o.code));
+    if(!r||r.price==null){ notListed++; return; }
+    if(Number(o.price)===Number(r.price)) same++; else changed++;
+  });
+  return {changed, same, notListed};
+}
+function renderPriceImport(){
+  const box=document.getElementById('piPreview'); if(!box) return;
+  const btn=document.getElementById('piApply');
+  if(!priceImport.rows.length){
+    box.innerHTML='<div class="minor" style="font-size:12.5px;padding:12px;background:var(--bg-2);border-radius:9px">Load the list above, or paste one, to see what would change.</div>';
+    if(btn) btn.disabled=true; return;
+  }
+  const pl=priceImportPlan();
+  const names=a=>a.slice(0,14).map(p=>esc(p.code||'')).join(', ')+(a.length>14?' … +'+(a.length-14)+' more':'');
+  const groups=priceImportGroups();
+  const eff=priceImport.reprice? repriceEffect() : null;
+  box.innerHTML=`
+    <div class="kpi-row" style="margin-bottom:12px">
+      <div class="kpi"><div class="lbl">On the new list</div><div class="val">${nf(priceImport.rows.length)}</div></div>
+      <div class="kpi k-blue"><div class="lbl">Prices changing</div><div class="val">${nf(pl.changed.length)}</div></div>
+      <div class="kpi k-green"><div class="lbl">New products</div><div class="val">${nf(pl.add.length)}</div></div>
+      <div class="kpi k-amber"><div class="lbl">Not on the list</div><div class="val">${nf(pl.removable.length+pl.keep.length)}</div></div>
+    </div>
+    ${pl.add.length?`<div class="minor" style="font-size:12px;margin-bottom:8px"><b>Added:</b> ${names(pl.add)}</div>`:''}
+    <label style="display:flex;gap:9px;align-items:flex-start;padding:10px;background:var(--bg-2);border-radius:9px;cursor:pointer;margin-bottom:8px">
+      <input type="checkbox" ${priceImport.removeUnlisted?'checked':''} onchange="priceImport.removeUnlisted=this.checked;renderPriceImport()" style="width:15px;height:15px;margin:2px 0 0">
+      <span style="font-size:12.5px">
+        <b>Remove the ${nf(pl.removable.length)} product${pl.removable.length===1?'':'s'} not on this list</b>
+        ${pl.removable.length?`<div class="minor" style="margin-top:3px">${names(pl.removable)}</div>`:'<div class="minor" style="margin-top:3px">Nothing to remove.</div>'}
+        ${pl.keep.length?`<div style="margin-top:6px;color:var(--amber)"><b>${nf(pl.keep.length)} kept</b> — used by existing orders, so they stay whatever you choose:<div class="minor" style="margin-top:2px">${names(pl.keep)}</div></div>`:''}
+      </span></label>
+    <label style="display:flex;gap:9px;align-items:flex-start;padding:10px;background:var(--bg-2);border-radius:9px;cursor:pointer">
+      <input type="checkbox" ${priceImport.reprice?'checked':''} onchange="priceImport.reprice=this.checked;renderPriceImport()" style="width:15px;height:15px;margin:2px 0 0">
+      <span style="font-size:12.5px"><b>Also reprice existing orders</b>
+        <div class="minor" style="margin-top:2px">Orders normally keep the price they were raised at. Tick only the groups you want repriced.</div></span></label>
+    ${priceImport.reprice?`<div style="margin-top:8px;max-height:210px;overflow:auto;border:1px solid var(--line);border-radius:9px;padding:6px">
+      ${groups.map(g=>`<label style="display:flex;gap:8px;align-items:center;padding:4px 7px;border-radius:6px;font-size:12.5px;cursor:pointer">
+        <input type="checkbox" ${priceImport.targets.has(g.key)?'checked':''} onchange="togglePriceTarget('${g.key.replace(/'/g,"\\'")}',this.checked)" style="width:14px;height:14px;margin:0">
+        <span>${esc(g.period)} &middot; <b>${esc(g.factory)}</b> <span class="minor">(${nf(g.n)} line${g.n===1?'':'s'})</span></span></label>`).join('')}
+    </div>
+    <div class="minor" style="font-size:12px;margin-top:7px">
+      ${eff?`<b>${nf(eff.changed)}</b> order line${eff.changed===1?'':'s'} would change price · ${nf(eff.same)} already match${eff.same===1?'es':''} · ${nf(eff.notListed)} not on the list (left alone)`:''}
+    </div>`:''}`;
+  if(btn) btn.disabled=false;
+}
+function togglePriceTarget(k,on){ on?priceImport.targets.add(k):priceImport.targets.delete(k); renderPriceImport(); }
+function applyPriceImport(){
+  const pl=priceImportPlan();
+  const eff=priceImport.reprice? repriceEffect() : {changed:0};
+  const bits=[`${pl.changed.length} price${pl.changed.length===1?'':'s'} updated`, `${pl.add.length} added`];
+  if(priceImport.removeUnlisted) bits.push(`${pl.removable.length} removed`);
+  if(priceImport.reprice) bits.push(`${eff.changed} order line${eff.changed===1?'':'s'} repriced`);
+  if(!confirm('Apply this price list?\n\n'+bits.join('\n')+(pl.keep.length?`\n\n${pl.keep.length} product(s) not on the list are used by existing orders and will be kept.`:'')+'\n\nTake a JSON backup first if you have not.')) return;
+  const key=c=>String(c||'').trim().toUpperCase();
+
+  pl.update.forEach(({r,ex})=>{
+    if(r.description) ex.description=r.description;
+    if(r.price!=null) ex.price=r.price;
+    if(r.rmbPrice!=null) ex.rmbPrice=r.rmbPrice;
+  });
+  pl.add.forEach(r=>state.products.push({code:r.code, description:r.description||'', factory:r.factory||'',
+    price:r.price!=null?r.price:null, rmbPrice:r.rmbPrice!=null?r.rmbPrice:null, profiles:r.profiles||[]}));
+  if(priceImport.removeUnlisted){
+    const drop=new Set(pl.removable.map(p=>key(p.code)));
+    state.products=state.products.filter(p=>!drop.has(key(p.code)));
+  }
+  let repriced=0;
+  if(priceImport.reprice){
+    const listed=new Map(priceImport.rows.map(r=>[key(r.code), r]));
+    state.orders.forEach(o=>{
+      const k=(o.periodISO||o.period||'?')+'\u0000'+(o.factory||'(no factory)');
+      if(!priceImport.targets.has(k)) return;
+      const r=listed.get(key(o.code));
+      if(!r||r.price==null) return;
+      if(Number(o.price)!==Number(r.price)){ o.price=r.price; repriced++; }
+    });
+  }
+  save(); closeModal(); fillFactoryList(); render();
+  toast(`${pl.changed.length} price(s) updated · ${pl.add.length} added${priceImport.removeUnlisted?` · ${pl.removable.length} removed`:''}${repriced?` · ${repriced} order line(s) repriced`:''}`);
+}
+
 function applyProductPaste(){
   const ta=document.getElementById('prodPaste'); const text=ta?ta.value:''; if(!text.trim()){ toast('Nothing to paste yet'); return; }
   const res=parseProductPaste(text);
