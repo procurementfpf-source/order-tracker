@@ -172,7 +172,17 @@ select.filter{padding:8px 12px;border-radius:var(--radius-s);border:1px solid va
   background:var(--panel);color:var(--txt);font-weight:500}
 
 /* ---------- Tables ---------- */
-.tbl-wrap{overflow-x:auto}
+/* The sideways scrollbar belongs at the bottom of the visible pane, not at the bottom
+   of a 400-row table where you have to scroll the whole page to reach it. Capping the
+   height makes the table scroll inside itself, exactly as the containers grid does.
+   It also switches on the sticky header these tables already asked for: sticky sticks
+   to the nearest scrolling ancestor, and until now there was no vertical one. */
+.tbl-wrap{overflow:auto;max-height:calc(100vh - 232px)}
+@media(max-width:880px){ .tbl-wrap{max-height:calc(100vh - 196px)} }
+@media print{
+  .tbl-wrap{max-height:none;overflow:visible}
+  .tbl-wrap thead th{position:static}
+}
 table{width:100%;border-collapse:collapse;font-size:13px}
 thead th{
   text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--txt-3);
@@ -573,7 +583,15 @@ td .mono{font-size:12.5px}
 .print-head h1{font-size:18px;margin:0}
 .print-head p{margin:3px 0 0;font-size:11px;color:#555}
 
+/* Hiding the menu hands its 226px to the content, which matters on the wide grids. */
+.side-collapse{background:none;border:none;color:var(--txt-3);cursor:pointer;padding:4px;
+  border-radius:7px;margin-left:auto;display:grid;place-items:center}
+.side-collapse:hover{background:var(--line);color:var(--txt)}
+.side-collapse .ic{width:16px;height:16px}
+body.side-hidden .side{display:none}
+body.side-hidden .menu-toggle{display:grid!important}
 @media(max-width:880px){
+  .side-collapse{display:none}
   .side{position:fixed;left:-240px;z-index:60;transition:.2s}
   .side.open{left:0}
   .menu-toggle{display:grid!important}
@@ -602,6 +620,16 @@ td .mono{font-size:12.5px}
 .buyer-tbl tr.brow-sub td{background:var(--bg-2);color:var(--txt-2);font-size:11.5px;padding-top:4px;padding-bottom:4px}
 .buyer-tbl tr.brow-sub .sub-arrow{color:var(--txt-3);margin-right:2px}
 .buyer-tbl tr.brow-sub td.late,.buyer-tbl tr.brow-sub td .late{color:var(--red)}
+/* Stock overview chrome: the search sits in the row with the buttons rather than in a
+   box of its own, and the toolbar is kept tight so the table gets the height. */
+.so-search{padding:8px 12px;border-radius:var(--radius-s);border:1px solid var(--line);
+  background:var(--panel);color:var(--txt);font-family:inherit;font-size:13px;
+  min-width:250px;flex:0 1 320px}
+.so-search:focus{outline:none;border-color:var(--accent)}
+.so-tools{margin-bottom:8px;gap:8px}
+.so-wrap{max-height:calc(100vh - 150px)}
+.so-wrap.cg-full{max-height:none}
+@media (max-width:900px){ .so-wrap{max-height:calc(100vh - 132px)} .so-search{flex:1 1 100%} }
 /* Shipment sub-rows inside the Stock overview. */
 /* A ticked container in the value picker. */
 tr.cv-on td{background:var(--accent-soft)}
@@ -690,6 +718,9 @@ tr.cg-detail>td{padding:0;background:var(--bg-2);border-bottom:2px solid var(--l
           <h1>Order Tracker</h1>
           <div class="sub">Much Better Furniture</div>
         </div>
+        <button class="side-collapse" title="Hide the menu" aria-label="Hide the menu" onclick="setSideCollapsed(true)">
+          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="m15 18-6-6 6-6"/></svg>
+        </button>
       </div>
     </div>
     <nav class="nav" id="nav"></nav>
@@ -706,7 +737,7 @@ tr.cg-detail>td{padding:0;background:var(--bg-2);border-bottom:2px solid var(--l
 
   <div class="main">
     <header class="topbar">
-      <button class="icon-btn menu-toggle" onclick="toggleSide(true)"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="18" x2="21" y2="18"/></svg></button>
+      <button class="icon-btn menu-toggle" title="Show the menu" onclick="sideButton()"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="18" x2="21" y2="18"/></svg></button>
       <div class="title" id="pageTitle"><h2>Dashboard</h2><p>Live view of stock in transit</p></div>
       <div class="spacer"></div>
       <button class="sync-pill off" id="syncPill" onclick="syncNow(true)" title="Cloud sync"><span class="dot"></span><span class="lbl">Sync off</span></button>
@@ -3591,13 +3622,13 @@ function viewStock(){
   return `
   <div class="print-head"><h1>Stock overview — ${esc(f.month==='all'?'All months':f.month)}</h1>
     <p>Much Better Furniture · ${fmtDate(todayISO())}</p></div>
-  <div class="toolbar no-print">
-    <div class="search-wrap"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
-      <input id="stockQ" placeholder="Code, description, PO, container, vessel…" value="${esc(f.q||'')}" oninput="stockSearch(this.value)"></div>
-    <select onchange="filters.stock.month=this.value;render()">
+  <div class="toolbar no-print so-tools">
+    <input id="stockQ" class="so-search" placeholder="Search code, description, PO, container, vessel…"
+      value="${esc(f.q||'')}" oninput="stockSearch(this.value)">
+    <select class="filter" onchange="filters.stock.month=this.value;render()">
       <option value="all" ${f.month==='all'?'selected':''}>All months</option>
       ${months.map(m=>`<option ${f.month===m?'selected':''}>${esc(m)}</option>`).join('')}</select>
-    <select onchange="filters.stock.status=this.value;render()">
+    <select class="filter" onchange="filters.stock.status=this.value;render()">
       ${['all','In Production','Partial','On Water','Complete','Cancelled'].map(x=>
         `<option value="${x}" ${f.status===x?'selected':''}>${x==='all'?'All statuses':x}</option>`).join('')}</select>
     <button class="btn sm" onclick="stockExpandAll(true)">Expand all</button>
@@ -3608,7 +3639,7 @@ function viewStock(){
     <span class="minor" style="font-size:12.5px">${nf(rows.length)} line${rows.length===1?'':'s'}${split?` · ${nf(split)} split across shipments`:''}</span>
   </div>
   <button class="btn sm cg-exit" onclick="stockExitFull()">Exit full screen (Esc)</button>
-  <div class="cg-wrap ${stockFull?'cg-full':''}"><table class="cg stock-tbl">
+  <div class="cg-wrap so-wrap ${stockFull?'cg-full':''}"><table class="cg stock-tbl">
     <thead>${head}</thead><tbody>${body}</tbody></table></div>`;
 }
 
@@ -5436,6 +5467,22 @@ function importJSON(ev){
 /* ============ SIDE (mobile) ============ */
 function toggleSide(open){ const s=document.getElementById('side'), sc=document.getElementById('sideScrim');
   if(open){ s.classList.add('open'); sc.classList.add('open'); } else { s.classList.remove('open'); sc.classList.remove('open'); } }
+/* Per device, not per account: a phone and a wide monitor want different answers, and
+   syncing it would push a change to the other devices on every toggle. */
+const UI_KEY='mbf_ui_v1';
+let uiPrefs=(function(){ try{ return Object.assign({sideHidden:false}, JSON.parse(localStorage.getItem(UI_KEY)||'{}')); }
+  catch(e){ return {sideHidden:false}; } })();
+function saveUiPrefs(){ try{ localStorage.setItem(UI_KEY, JSON.stringify(uiPrefs)); }catch(e){} }
+function setSideCollapsed(on){
+  uiPrefs.sideHidden=!!on; saveUiPrefs();
+  document.body.classList.toggle('side-hidden', !!on);
+}
+/* Narrow screens still get the slide-over drawer; wide ones toggle the collapse. */
+function sideButton(){
+  const narrow = typeof window!=='undefined' && window.matchMedia
+    && window.matchMedia('(max-width:880px)').matches;
+  if(narrow) toggleSide(true); else setSideCollapsed(!uiPrefs.sideHidden);
+}
 
 /* ============ INIT ============ */
 const BACKUP_REMINDER_DAYS = 7;
@@ -5917,6 +5964,7 @@ if('serviceWorker' in navigator){
 
 
 document.documentElement.style.setProperty('--cg-row', contGrid.dense?'26px':'34px');
+setSideCollapsed(uiPrefs.sideHidden);
 applyTheme(); fillFactoryList(); go('dashboard'); renderBackupBanner();
 syncSetState(syncConfigured()?'idle':'off','');
 if(syncConfigured()) syncNow(false);
