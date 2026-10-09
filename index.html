@@ -341,6 +341,10 @@ td .mono{font-size:12.5px}
 .cc-menu.open{display:block}
 /* The card clips its own overflow, so let it through while a menu is showing. */
 .ccard.menu-open{overflow:visible;position:relative;z-index:50}
+/* In the containers grid the clipper is the scrolling wrapper itself, which has to
+   keep overflow:auto — an absolutely positioned menu can never escape it. This copy
+   is attached to the page body and positioned from the button's screen rect. */
+.cc-menu.cc-menu-float{position:fixed;z-index:210;right:auto}
 /* Bulk edit: a ticked row is the one that will actually be written, so mark it clearly. */
 .bulk-row{border-radius:9px;padding:4px 6px;margin:0 -6px;transition:background .12s}
 .bulk-row.bulk-on{background:var(--accent-soft)}
@@ -598,6 +602,12 @@ td .mono{font-size:12.5px}
 .buyer-tbl tr.brow-sub td{background:var(--bg-2);color:var(--txt-2);font-size:11.5px;padding-top:4px;padding-bottom:4px}
 .buyer-tbl tr.brow-sub .sub-arrow{color:var(--txt-3);margin-right:2px}
 .buyer-tbl tr.brow-sub td.late,.buyer-tbl tr.brow-sub td .late{color:var(--red)}
+/* Shipment sub-rows inside the Stock overview. */
+/* A ticked container in the value picker. */
+tr.cv-on td{background:var(--accent-soft)}
+.stock-tbl tr.stock-sub td{background:var(--bg-2);color:var(--txt-2);font-size:11.5px}
+.stock-tbl tr.stock-sub .sub-arrow{color:var(--txt-3);margin-right:3px}
+.stock-tbl td.late,.stock-tbl .late{color:var(--red);font-weight:700}
 .cg-wrap{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
   overflow:auto;max-height:calc(100vh - 196px);min-height:300px;position:relative}
 /* Full screen: the grid takes the whole viewport, chrome and all. */
@@ -754,7 +764,9 @@ if(state.shippingCharges.rmbToUsd===undefined) state.shippingCharges.rmbToUsd=nu
 if(!Array.isArray(state.pnl)) state.pnl = [];   // frozen profit/loss snapshots, one per delivered container
 let invoiceCtx = null;   // { containerId, invNo, date, contNo, items:[{code,qty}] }
 let activeTab = 'dashboard';
-let filters = { orders:{q:'',status:'all',factory:'all',month:'all',showDone:false}, containers:{q:'',status:'On Water'}, buyer:{month:''}, warehouse:{month:'all',basis:'deliv'} };
+let filters = { orders:{q:'',status:'all',factory:'all',month:'all',showDone:false}, containers:{q:'',status:'On Water'}, buyer:{month:''}, warehouse:{month:'all',basis:'deliv'},
+  stock:{month:'all',status:'all',q:''} };
+const expandedStock=new Set();
 let prodFilterState = { search:'', sort:{col:null,dir:1}, col:{code:null,description:null,factory:null,price:null,profiles:null} };
 const PROD_FILTER_KEYS = ['code','description','factory','price','rmbPrice','profiles'];
 
@@ -943,6 +955,7 @@ const TABS=[
   {id:'sync', label:'Sync', icon:'M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15'},
 ];
 const REPORT_TABS=[
+  {id:'stock', label:'Stock overview', icon:'M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4'},
   {id:'reports', label:'Reports', icon:'M3 3v18h18M7 15l4-5 3 3 5-7'},
 ];
 function renderNav(){
@@ -965,6 +978,7 @@ const TITLES={
   arrivals:['Arrivals by month','Outstanding quantity bucketed by expected delivery'],
   warehouse:['Warehouse — On Water','Every line currently in transit'],
   buyer:['Buyer report','Order status by factory'],
+  stock:['Stock overview','Every order line and the shipments carrying it — where the time is going'],
   invoice:['Invoice','Tax invoice generated from a container'],
   statement:['Statement','Compile a customer statement from invoices'],
   shipping:['Shipping charges','ROE, forwarding, clearing and transport charges'],
@@ -977,7 +991,7 @@ function go(tab){
   const [t,s]=TITLES[tab];
   document.getElementById('pageTitle').innerHTML='<h2>'+t+'</h2><p>'+s+'</p>';
   const pa=document.getElementById('primaryAction'), lbl=document.getElementById('primaryActionLbl');
-  pa.style.display = (tab==='statement'||tab==='shipping'||tab==='codeLookup'||tab==='reports'||tab==='sync') ? 'none' : '';
+  pa.style.display = (tab==='statement'||tab==='shipping'||tab==='codeLookup'||tab==='reports'||tab==='sync'||tab==='stock') ? 'none' : '';
   if(tab==='invoice'){ lbl.textContent='New invoice'; pa.onclick=()=>openInvoicePicker(); }
   else if(tab==='products'){ lbl.textContent='Add product'; pa.onclick=()=>productAdd(); }
   else if(tab==='containers'||tab==='warehouse'||tab==='dashboard'){ lbl.textContent='Pack container'; pa.onclick=()=>openPackModal(); }
@@ -996,7 +1010,7 @@ function render(){
   const v=document.getElementById('view');
   v.innerHTML = ({
     dashboard:viewDashboard, orders:viewOrders, containers:viewContainers,
-    outstanding:viewOutstanding, arrivals:viewArrivals, warehouse:viewWarehouse, buyer:viewBuyer, invoice:viewInvoice, products:viewProducts, statement:viewStatement, shipping:viewShipping, codeLookup:viewCodeLookup, reports:viewReports, sync:viewSync
+    outstanding:viewOutstanding, arrivals:viewArrivals, warehouse:viewWarehouse, buyer:viewBuyer, invoice:viewInvoice, products:viewProducts, statement:viewStatement, shipping:viewShipping, codeLookup:viewCodeLookup, reports:viewReports, stock:viewStock, sync:viewSync
   }[activeTab])();
   renderNav();
   if(activeTab==='invoice') renderInvoiceItems();
@@ -1375,8 +1389,8 @@ function openPoModal(key, focus){
   const uniq=k=>[...new Set(g.orders.map(o=>o[k]||''))];
   const pos=uniq('po'), months=uniq('periodISO'), etds=uniq('plannedEtd'), etas=uniq('plannedEta');
   const fps=uniq('fpConfirmed'), pls=uniq('supplierPlaced');
-  const mixed=[pos.length>1?'PO number':'',months.length>1?'order month':'',etds.length>1?'planned ETD':'',etas.length>1?'planned ETA':'',
-    fps.length>1?'date confirmed (FP)':'',pls.length>1?'date placed with supplier':''].filter(Boolean);
+  const mixed=[pos.length>1?'PO number':'',months.length>1?'order month':'',etds.length>1?'required ETD':'',etas.length>1?'required ETA':'',
+    fps.length>1?'FP order date':'',pls.length>1?'date placed with supplier':''].filter(Boolean);
   const ov=document.getElementById('overlay');
   ov.innerHTML=`<div class="modal wide"><div class="modal-head">
     <div><h3>Edit PO</h3><p>Change the PO details, adjust existing lines, or add new ones</p></div>
@@ -1389,12 +1403,12 @@ function openPoModal(key, focus){
         <div><label>Order month <span class="req">*</span></label><input type="month" id="po_month" value="${esc(months[0]||'')}"></div>
       </div>
       <div class="field row">
-        <div><label>Order confirmed (FP)</label><input type="date" id="po_fpconf" value="${esc(fps[0]||'')}"></div>
+        <div><label>FP order date</label><input type="date" id="po_fpconf" value="${esc(fps[0]||'')}"></div>
         <div><label>Placed with supplier</label><input type="date" id="po_placed" value="${esc(pls[0]||'')}"></div>
       </div>
       <div class="field row">
-        <div><label>Planned ETD</label><input type="date" id="po_petd" value="${esc(etds[0]||'')}"></div>
-        <div><label>Planned ETA</label><input type="date" id="po_peta" value="${esc(etas[0]||'')}"></div>
+        <div><label>Required ETD</label><input type="date" id="po_petd" value="${esc(etds[0]||'')}"></div>
+        <div><label>Required ETA</label><input type="date" id="po_peta" value="${esc(etas[0]||'')}"></div>
       </div>
       <label style="font-size:12px;font-weight:600;color:var(--txt-2);margin:14px 0 4px;display:block">Lines on this PO</label>
       <div id="po_existing"></div>
@@ -1573,6 +1587,7 @@ const CG_COLS=[
   {k:'line', t:'Line', w:92, filter:true},
   {k:'containerType', t:'Type', w:74, filter:true},
   {k:'terminal', t:'Terminal', w:88, filter:true},
+  {k:'stockReady', t:'Stock ready', w:96, cls:'mono', filter:true, off:true, cell:c=>fmtDateShort(c.stockReady)},
   {k:'loadDate', t:'Load date', w:92, cls:'mono', filter:true, off:true, cell:c=>fmtDateShort(c.loadDate)},
   {k:'etd', t:'ETD', w:88, cls:'mono', filter:true, print:true, cell:c=>fmtDateShort(c.etd)},
   {k:'eta', t:'ETA', w:88, cls:'mono', filter:true, print:true, cell:c=>fmtDateShort(c.eta)},
@@ -1643,6 +1658,7 @@ function cgToggleFull(){
 }
 function cgExitFull(){ if(cgFull) cgToggleFull(); }
 document.addEventListener('keydown',e=>{ if(e.key==='Escape' && cgFull) cgExitFull(); });
+document.addEventListener('keydown',e=>{ if(e.key==='Escape' && typeof stockFull!=='undefined' && stockFull) stockExitFull(); });
 function cgToggleDense(){
   contGrid.dense=!contGrid.dense; cgSave();
   document.documentElement.style.setProperty('--cg-row', contGrid.dense?'26px':'34px');
@@ -1650,8 +1666,23 @@ function cgToggleDense(){
 }
 function cgClearFilters(){ contGrid.colFilters={}; cgRefresh(); }
 function cgActiveFilters(){ return Object.keys(contGrid.colFilters).filter(k=>contGrid.colFilters[k]&&contGrid.colFilters[k].size).length; }
+/* Redrawing a list means replacing its scroll container, and a brand new element
+   starts at the top — so expanding a row near the bottom threw you back to the top of
+   the list. Measure where the view was, redraw, put it back. */
+function keepScroll(fn){
+  const q=sel=>{ try{ return document.querySelector(sel); }catch(e){ return null; } };
+  const before=q('.cg-wrap');
+  const top=before?before.scrollTop:0, left=before?before.scrollLeft:0;
+  const pageY=(typeof window!=='undefined' && window.scrollY)||0;
+  fn();
+  const after=q('.cg-wrap');
+  if(after){ after.scrollTop=top; after.scrollLeft=left; }
+  if(pageY && typeof window!=='undefined' && window.scrollTo) window.scrollTo(0,pageY);
+}
 function cgRefresh(){
-  const el=document.getElementById('containersList'); if(el) el.innerHTML=containersListHTML();
+  keepScroll(()=>{
+    const el=document.getElementById('containersList'); if(el) el.innerHTML=containersListHTML();
+  });
   const c=document.getElementById('contCount'); if(c) c.textContent=containersCountText();
   const b=document.getElementById('contBulkBar'); if(b) b.innerHTML=containersBulkBarHTML();
 }
@@ -1697,8 +1728,7 @@ function containersGridHTML(){
         ${c.status==='Delivered'?`<button class="btn sm" onclick="unreceiveContainer('${c.id}')">Reopen</button>`
                                 :`<button class="btn sm primary" onclick="receiveContainer('${c.id}')">Mark received</button>`}
         <button class="btn sm" onclick="openPackModal('${c.id}')">Edit</button>
-        <div class="cc-menu-wrap"><button class="btn sm cc-menu-btn" title="More actions" onclick="ccMenu('${c.id}',event)">···</button>
-          <div class="cc-menu" id="ccm-${c.id}"></div></div>
+        <div class="cc-menu-wrap"><button class="btn sm cc-menu-btn" title="More actions" onclick="ccMenu('${c.id}',event)">···</button></div>
       </div></td></tr>`+
       (open?`<tr class="cg-detail"><td colspan="${cols.length+3}"><div class="cg-detail-inner">${containerBodyHTML(c)}</div></td></tr>`:'');
   }).join('');
@@ -1781,13 +1811,13 @@ function exportContainers(){
   const stat=c=>c.status==='Delivered'?'Delivered':(c.finalVessel===false?'Vessel TBC':'On water');
 
   /* -- sheet 1: stock by container -- */
-  const s1=[[ 'Factory','Container no','POL','Vessel','Line','Type','Terminal','Load date','ETD','ETA','Expected',
+  const s1=[[ 'Factory','Container no','POL','Vessel','Line','Type','Terminal','Stock ready','Load date','ETD','ETA','Expected',
               'Status','Code','Profile','Description','Order month','Qty' ].map(H)];
   let qtyTot=0;
   cs.forEach(c=>{
     const head=[ xcell(containerFactory(c)||''), xcell((c.containerNo||'').replace(/\s+/g,'')), xcell(c.pol||''),
       xcell(c.vessel||''), xcell(c.line||''), xcell(c.containerType||''), xcell(c.terminal||''),
-      xdate(c.loadDate), xdate(c.etd), xdate(c.eta), xdate(exp(c)), xcell(stat(c)) ];
+      xdate(c.stockReady), xdate(c.loadDate), xdate(c.etd), xdate(c.eta), xdate(exp(c)), xcell(stat(c)) ];
     const lines=c.lines||[];
     if(!lines.length){
       /* An empty container still gets a row, so it is not silently missing from the sheet. */
@@ -1802,10 +1832,10 @@ function exportContainers(){
     });
   });
   const s1DataEnd=s1.length;
-  s1.push([ xcell('Total',1), ...Array(15).fill(0).map(()=>xcell('',1)), xcell(qtyTot,3) ]);
+  s1.push([ xcell('Total',1), ...Array(16).fill(0).map(()=>xcell('',1)), xcell(qtyTot,3) ]);
 
   /* -- sheet 2: containers -- */
-  const s2=[[ 'Factory','Container no','POL','Vessel','Line','Type','Terminal','Load date','ETD','ETA','Expected',
+  const s2=[[ 'Factory','Container no','POL','Vessel','Line','Type','Terminal','Stock ready','Load date','ETD','ETA','Expected',
               'Transit (days)','Transhipment','Comment','Units','Status' ].map(H)];
   let unitTot=0;
   cs.forEach(c=>{
@@ -1813,19 +1843,19 @@ function exportContainers(){
     const t=transitDays(c);
     s2.push([ xcell(containerFactory(c)||''), xcell((c.containerNo||'').replace(/\s+/g,'')), xcell(c.pol||''),
       xcell(c.vessel||''), xcell(c.line||''), xcell(c.containerType||''), xcell(c.terminal||''),
-      xdate(c.loadDate), xdate(c.etd), xdate(c.eta), xdate(exp(c)),
+      xdate(c.stockReady), xdate(c.loadDate), xdate(c.etd), xdate(c.eta), xdate(exp(c)),
       t==null? xcell('') : xcell(t,2),
       xcell(c.transhipment? `${c.tsEta||''} → ${c.tsEtd||''}${c.tsVessel?' · '+c.tsVessel:''}` : ''),
       xcell(c.comment||''), xcell(u,2), xcell(stat(c)) ]);
   });
   const s2DataEnd=s2.length;
-  s2.push([ xcell('Total',1), ...Array(13).fill(0).map(()=>xcell('',1)), xcell(unitTot,3), xcell('',1) ]);
+  s2.push([ xcell('Total',1), ...Array(14).fill(0).map(()=>xcell('',1)), xcell(unitTot,3), xcell('',1) ]);
 
   downloadBytes(makeXlsxBook([
     { name:'Stock by container', aoa:s1, filter:true, filterEnd:s1DataEnd, first:true,
-      colW:[16,15,11,20,11,8,10,11,11,11,11,11,11,11,34,14,9] },
+      colW:[16,15,11,20,11,8,10,12,11,11,11,11,11,11,11,34,14,9] },
     { name:'Containers', aoa:s2, filter:true, filterEnd:s2DataEnd,
-      colW:[16,15,11,20,11,8,10,11,11,11,11,13,30,30,9,11] },
+      colW:[16,15,11,20,11,8,10,12,11,11,11,11,13,30,30,9,11] },
   ]), 'containers-'+todayISO()+'.xlsx');
   toast(`Excel downloaded — ${cs.length} container${cs.length===1?'':'s'}, ${s1DataEnd-1} row${s1DataEnd===2?'':'s'}`);
 }
@@ -1872,6 +1902,14 @@ function ccMenuClose(){
   document.querySelectorAll('.cc-menu.open').forEach(m=>m.classList.remove('open'));
   document.querySelectorAll('.ccard.menu-open').forEach(c=>c.classList.remove('menu-open'));
 }
+/* One menu element for the whole page, parked on <body> so no scrolling ancestor
+   can clip it. */
+function ccMenuEl(){
+  let m=document.getElementById('ccMenuFloat');
+  if(!m){ m=document.createElement('div'); m.id='ccMenuFloat'; m.className='cc-menu cc-menu-float';
+    m.addEventListener('click',ev=>ev.stopPropagation()); document.body.appendChild(m); }
+  return m;
+}
 /* Built on demand rather than baked into every card — with a long list that markup
    was the single biggest cost of drawing the page. */
 function ccMenuHTML(id){
@@ -1886,16 +1924,29 @@ function ccMenuHTML(id){
 }
 function ccMenu(id, ev){
   if(ev) ev.stopPropagation();
-  const m=document.getElementById('ccm-'+id); if(!m) return;
-  const wasOpen=m.classList.contains('open');
+  const m=ccMenuEl();
+  const wasOpen=m.classList.contains('open') && m.dataset.cc===id;
   ccMenuClose();
-  if(!wasOpen){
-    m.innerHTML=ccMenuHTML(id);
-    m.classList.add('open');
-    const card=m.closest('.ccard'); if(card) card.classList.add('menu-open');
+  if(wasOpen) return;
+  m.dataset.cc=id;
+  m.innerHTML=ccMenuHTML(id);
+  m.classList.add('open');
+  const btn=ev&&ev.currentTarget&&ev.currentTarget.getBoundingClientRect
+    ? ev.currentTarget.getBoundingClientRect() : null;
+  if(btn){
+    const w=200, h=m.offsetHeight||150;
+    /* Right-align under the button, then keep it on screen: flip above when there is
+       no room below, and never let it run off either edge. */
+    let left=Math.min(Math.max(8, btn.right-w), (window.innerWidth||1200)-w-8);
+    let top=btn.bottom+5;
+    if(top+h > (window.innerHeight||800)-8) top=Math.max(8, btn.top-h-5);
+    m.style.left=left+'px'; m.style.top=top+'px'; m.style.minWidth=w+'px';
   }
 }
-document.addEventListener('click', e=>{ if(!e.target.closest('.cc-menu-wrap')) ccMenuClose(); });
+/* The menu is positioned from a screen rect, so it would hang in mid-air if the list
+   scrolled underneath it. */
+window.addEventListener('scroll', ccMenuClose, true);
+document.addEventListener('click', e=>{ if(!e.target.closest('.cc-menu-wrap') && !e.target.closest('.cc-menu')) ccMenuClose(); });
 document.addEventListener('keydown', e=>{ if(e.key==='Escape') ccMenuClose(); });
 /* Discharge terminals. Kept as a list so adding a fourth is a one-line change. */
 const TERMINALS = ['DGT','Pier 1','MPT'];
@@ -2144,7 +2195,7 @@ function exportOSReport(){
 function exportOrders(){
   if(!state.orders.length){ toast('No orders to export'); return; }
   const rows=state.orders.map(o=>({o,s:orderStats(o),st:orderStatus(o)})).sort((a,b)=>(b.o.createdAt||0)-(a.o.createdAt||0));
-  const H=['Month','PO','Code','Profile','Description','Factory','Planned ETD','Planned ETA','Ordered','In production','On water','Delivered','Cancelled','O/S','Status'];
+  const H=['Month','PO','Code','Profile','Description','Factory','Required ETD','Required ETA','Ordered','In production','On water','Delivered','Cancelled','O/S','Status'];
   const aoa=[H.map(h=>xcell(h,5))];
   rows.forEach(({o,s,st})=>aoa.push([ xcell(o.period||''),xcell(o.po||''),xcell(o.code||''),xcell(o.profile||''),xcell(o.description||''),xcell(o.factory||''),
     o.plannedEtd?xdate(o.plannedEtd):xcell(''), o.plannedEta?xdate(o.plannedEta):xcell(''),
@@ -2159,7 +2210,7 @@ function exportBuyer(){
   if(sel) rows=rows.filter(r=>r.o.period===sel);
   rows.sort((a,b)=> String(a.o.factory||'~').localeCompare(String(b.o.factory||'~')) || (a.o.period||'').localeCompare(b.o.period||'') || String(a.o.code).localeCompare(String(b.o.code)));
   if(!rows.length){ toast('Nothing to export for '+(sel||'this month')); return; }
-  const H=['Factory','Month','Code','Profile','Description','Ordered','Shipped','O/S','Confirmed (FP)','Placed with supplier','Load date','Planned ETD','Actual ETD','Planned ETA','Exp delivery','Completed','Late days','Status','Comment'];
+  const H=['Factory','Month','Code','Profile','Description','Ordered','Shipped','O/S','FP order date','Placed with supplier','Load date','Required ETD','Actual ETD','Required ETA','Exp delivery','Completed','Late days','Status','Comment'];
   const aoa=[H.map(h=>xcell(h,5))];
   rows.forEach(({o,s,st})=>{ const late=buyerLate(o); const exp=buyerExpDeliv(o);
     aoa.push([ xcell(o.factory||''),xcell(o.period||''),xcell(o.code||''),xcell(o.profile||''),xcell(o.description||''),
@@ -2443,6 +2494,9 @@ const REPORTS=[
   {id:'pnl', name:'Profit & Loss', tag:'Finance',
    desc:'Selling less landed cost for every delivered container added to the P&L, by month, with full workings.',
    icon:'M3 3v18h18M7 15l4-4 3 3 5-6'},
+  {id:'containerValues', name:'Container values', tag:'Finance',
+   desc:'What each container is worth — delivered, by upcoming month, and any set of on-water containers you pick.',
+   icon:'M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4M9 12.5 15 9'},
   {id:'priceList', name:'Price list', tag:'Products',
    desc:'Every product code and description with its RMB and rand price — ready to print or send out.',
    icon:'M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6'},
@@ -2450,11 +2504,167 @@ const REPORTS=[
 let reportsState={open:''};
 function openReport(id){ reportsState.open=id; render(); window.scrollTo(0,0); }
 function closeReport(){ reportsState.open=''; render(); window.scrollTo(0,0); }
+
+/* ============ CONTAINER VALUES ============
+   Value is the selling value of what is inside: each line's shipped quantity times
+   the price the order was raised at, falling back to the product list when the order
+   never captured one. A line with no price either way is counted as unpriced and
+   reported rather than silently treated as zero. */
+let cvSel=new Set();
+function containerValue(c){
+  let value=0, units=0, unpriced=0; const missing=[];
+  (c.lines||[]).forEach(l=>{
+    const o=order(l.orderId); units+=(l.qty||0);
+    const pr=o? resolveLinePrice(o) : null;
+    if(pr==null){ unpriced+=(l.qty||0); const code=o&&o.code? o.code : '(unknown)';
+      if(!missing.includes(code)) missing.push(code); }
+    else value+=(l.qty||0)*pr;
+  });
+  return {value, units, unpriced, missing};
+}
+function cvData(){
+  const delivered=state.containers.filter(c=>c.status==='Delivered')
+    .map(c=>({c, v:containerValue(c)}))
+    .sort((a,b)=> String(b.c.deliveredAt||'').localeCompare(String(a.c.deliveredAt||'')));
+  const onWater=state.containers.filter(c=>c.status==='On Water')
+    .map(c=>{ const d=expDelivOf(c);
+      return {c, v:containerValue(c), exp:d, key:d?monthKey(d):'', label:d?monthLabel(d):'No ETA'}; })
+    .sort((a,b)=> String(a.key||'~').localeCompare(String(b.key||'~'))
+      || String(a.c.containerNo||'').localeCompare(String(b.c.containerNo||'')));
+  const months=[];
+  onWater.forEach(r=>{
+    let m=months.find(x=>x.label===r.label);
+    if(!m){ m={label:r.label, key:r.key, n:0, units:0, value:0, unpriced:0}; months.push(m); }
+    m.n++; m.units+=r.v.units; m.value+=r.v.value; m.unpriced+=r.v.unpriced;
+  });
+  months.sort((a,b)=> (a.key?0:1)-(b.key?0:1) || String(a.key).localeCompare(String(b.key)));
+  const sum=a=>a.reduce((x,y)=>x+y.v.value,0);
+  const sel=onWater.filter(r=>cvSel.has(r.c.id));
+  return {delivered, onWater, months,
+    delTotal:sum(delivered), waterTotal:sum(onWater), selTotal:sum(sel),
+    selUnits:sel.reduce((x,y)=>x+y.v.units,0), selN:sel.length,
+    unpriced:[...delivered,...onWater].reduce((x,y)=>x+y.v.unpriced,0),
+    missing:[...new Set([...delivered,...onWater].flatMap(r=>r.v.missing))]};
+}
+function cvToggle(id){ cvSel.has(id)?cvSel.delete(id):cvSel.add(id); keepScroll(render); }
+function cvSelectAll(on){ const D=cvData();
+  if(on) D.onWater.forEach(r=>cvSel.add(r.c.id)); else cvSel.clear(); keepScroll(render); }
+function cvSelectMonth(label){
+  const D=cvData(); const rows=D.onWater.filter(r=>r.label===label);
+  const allOn=rows.every(r=>cvSel.has(r.c.id));
+  rows.forEach(r=>allOn?cvSel.delete(r.c.id):cvSel.add(r.c.id));
+  keepScroll(render);
+}
+function reportContainerValues(){
+  const D=cvData();
+  const d=x=>fmtDateShort(x);
+  const warn = D.unpriced? `<div class="minor" style="font-size:12px;margin-top:10px;color:var(--amber)">
+      <b>${nf(D.unpriced)} unit${D.unpriced===1?'':'s'}</b> have no price on the order or the product list, so they add nothing to these totals${D.missing.length?` — ${esc(D.missing.slice(0,12).join(', '))}${D.missing.length>12?' …':''}`:''}.</div>` : '';
+
+  return `
+  <div class="print-head"><h1>Container values</h1><p>Much Better Furniture · ${fmtDate(todayISO())}</p></div>
+  <div class="toolbar no-print">
+    <button class="btn sm" onclick="closeReport()"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="m15 18-6-6 6-6"/></svg> All reports</button>
+    <div style="flex:1"></div>
+    <button class="btn" onclick="exportContainerValues()"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6z"/><path d="M14 2v6h6"/><path d="M9 13l2 3 2-3 2 3" stroke-linecap="round"/></svg> Export to Excel</button>
+  </div>
+  <div class="kpis">
+    <div class="kpi k-green"><div class="lbl">Delivered</div><div class="val" style="font-size:19px">${money(D.delTotal)}</div><div class="note">${nf(D.delivered.length)} container${D.delivered.length===1?'':'s'}</div></div>
+    <div class="kpi k-blue"><div class="lbl">On the water</div><div class="val" style="font-size:19px">${money(D.waterTotal)}</div><div class="note">${nf(D.onWater.length)} container${D.onWater.length===1?'':'s'}</div></div>
+    <div class="kpi ${D.selN?'k-amber':''}"><div class="lbl">Selected</div><div class="val" style="font-size:19px">${money(D.selTotal)}</div><div class="note">${D.selN?`${nf(D.selN)} container${D.selN===1?'':'s'} · ${nf(D.selUnits)} units`:'none picked yet'}</div></div>
+  </div>
+  ${warn}
+
+  <h3 style="font-size:14px;margin:20px 0 9px">Delivered containers</h3>
+  <div class="panel"><div class="tbl-wrap">
+    ${D.delivered.length?`<table><thead><tr><th>Container</th><th>Vessel</th><th>POL</th><th>Terminal</th>
+      <th>Delivered</th><th class="num">Units</th><th class="num">Value</th></tr></thead><tbody>
+      ${D.delivered.map(r=>`<tr><td class="mono" style="font-weight:600">${esc(r.c.containerNo||'—')}</td>
+        <td>${esc(r.c.vessel||'—')}</td><td class="minor">${esc(r.c.pol||'—')}</td><td class="minor">${esc(r.c.terminal||'—')}</td>
+        <td class="mono">${d(r.c.deliveredAt)}</td><td class="num mono">${nf(r.v.units)}</td>
+        <td class="num mono">${money(r.v.value)}${r.v.unpriced?`<span class="minor" title="${esc(r.v.missing.join(', '))}"> +${nf(r.v.unpriced)} unpriced</span>`:''}</td></tr>`).join('')}
+      <tr class="group-row"><td colspan="5">Total delivered</td>
+        <td class="num">${nf(D.delivered.reduce((a,r)=>a+r.v.units,0))}</td><td class="num">${money(D.delTotal)}</td></tr>
+    </tbody></table>`:emptyBlock('No delivered containers yet','box','Mark a container received and it appears here with its value.')}
+  </div></div>
+
+  <h3 style="font-size:14px;margin:22px 0 9px">Value arriving by month</h3>
+  <div class="minor" style="font-size:12px;margin-bottom:8px">On-water containers, grouped by expected delivery (ETA plus ${ETA_BUFFER_DAYS} days).</div>
+  <div class="panel"><div class="tbl-wrap">
+    ${D.months.length?`<table><thead><tr><th>Month</th><th class="num">Containers</th><th class="num">Units</th><th class="num">Value</th><th class="no-print"></th></tr></thead><tbody>
+      ${D.months.map(m=>`<tr><td><b>${esc(m.label)}</b></td><td class="num mono">${nf(m.n)}</td>
+        <td class="num mono">${nf(m.units)}</td><td class="num mono">${money(m.value)}</td>
+        <td class="no-print"><button class="btn sm" onclick="cvSelectMonth('${esc(m.label).replace(/'/g,"\\'")}')">Select month</button></td></tr>`).join('')}
+      <tr class="group-row"><td>Total on the water</td><td class="num">${nf(D.onWater.length)}</td>
+        <td class="num">${nf(D.onWater.reduce((a,r)=>a+r.v.units,0))}</td><td class="num">${money(D.waterTotal)}</td><td class="no-print"></td></tr>
+    </tbody></table>`:emptyBlock('Nothing on the water','ship','Containers marked On Water appear here, grouped by the month they should land.')}
+  </div></div>
+
+  <h3 style="font-size:14px;margin:22px 0 9px">Pick containers to value</h3>
+  <div class="toolbar no-print" style="margin-bottom:8px">
+    <button class="btn sm" onclick="cvSelectAll(true)">Select all</button>
+    <button class="btn sm" onclick="cvSelectAll(false)">Clear</button>
+    <div style="flex:1"></div>
+    <span class="minor" style="font-size:12.5px">${D.selN?`${nf(D.selN)} selected · <b>${money(D.selTotal)}</b>`:'Tick containers to total them'}</span>
+  </div>
+  <div class="panel"><div class="tbl-wrap">
+    ${D.onWater.length?`<table><thead><tr><th class="no-print" style="width:34px"></th><th>Container</th><th>Vessel</th>
+      <th>ETA</th><th>Exp. delivery</th><th>Arrives</th><th class="num">Units</th><th class="num">Value</th></tr></thead><tbody>
+      ${D.onWater.map(r=>`<tr class="${cvSel.has(r.c.id)?'cv-on':''}">
+        <td class="no-print" style="text-align:center"><input type="checkbox" ${cvSel.has(r.c.id)?'checked':''}
+          onclick="cvToggle('${r.c.id}')" style="width:14px;height:14px;margin:0"></td>
+        <td class="mono" style="font-weight:600">${esc(r.c.containerNo||'—')}</td><td>${esc(r.c.vessel||'—')}</td>
+        <td class="mono">${d(r.c.eta)}</td><td class="mono">${r.exp?fmtDateShort(r.exp):'—'}</td>
+        <td class="minor">${esc(r.label)}</td><td class="num mono">${nf(r.v.units)}</td>
+        <td class="num mono">${money(r.v.value)}${r.v.unpriced?`<span class="minor" title="${esc(r.v.missing.join(', '))}"> +${nf(r.v.unpriced)} unpriced</span>`:''}</td></tr>`).join('')}
+      <tr class="group-row"><td class="no-print"></td><td colspan="5">${D.selN?`Selected — ${nf(D.selN)} container${D.selN===1?'':'s'}`:'Nothing selected'}</td>
+        <td class="num">${nf(D.selUnits)}</td><td class="num">${money(D.selTotal)}</td></tr>
+    </tbody></table>`:''}
+  </div></div>`;
+}
+function exportContainerValues(){
+  const D=cvData();
+  if(!D.delivered.length && !D.onWater.length){ toast('No containers to value'); return; }
+  const H=x=>xcell(x,5);
+  const line=r=>[xcell(r.c.containerNo||''),xcell(r.c.vessel||''),xcell(r.c.line||''),xcell(r.c.pol||''),
+    xcell(r.c.terminal||''),xdate(r.c.etd),xdate(r.c.eta)];
+
+  const s1=[['Container','Vessel','Line','POL','Terminal','ETD','ETA','Delivered','Units','Value','Unpriced units','Codes with no price'].map(H)];
+  D.delivered.forEach(r=>s1.push([...line(r),xdate(r.c.deliveredAt),xcell(r.v.units,2),xcell(r.v.value,7),
+    xcell(r.v.unpriced,2),xcell(r.v.missing.join(', '))]));
+  const s1End=s1.length;
+  s1.push([xcell('Total',1),...Array(7).fill(0).map(()=>xcell('',1)),
+    xcell(D.delivered.reduce((a,r)=>a+r.v.units,0),3),xcell(D.delTotal,7),xcell('',1),xcell('',1)]);
+
+  const s2=[['Arrives','Containers','Units','Value'].map(H)];
+  D.months.forEach(m=>s2.push([xcell(m.label),xcell(m.n,2),xcell(m.units,2),xcell(m.value,7)]));
+  const s2End=s2.length;
+  s2.push([xcell('Total',1),xcell(D.onWater.length,3),
+    xcell(D.onWater.reduce((a,r)=>a+r.v.units,0),3),xcell(D.waterTotal,7)]);
+
+  const s3=[['Selected','Container','Vessel','Line','POL','Terminal','ETD','ETA','Exp. delivery','Arrives','Units','Value','Unpriced units'].map(H)];
+  D.onWater.forEach(r=>s3.push([xcell(cvSel.has(r.c.id)?'YES':''),...line(r),
+    xdate(r.exp? r.exp.toISOString().slice(0,10) : null),xcell(r.label),xcell(r.v.units,2),xcell(r.v.value,7),xcell(r.v.unpriced,2)]));
+  const s3End=s3.length;
+  s3.push([xcell('Selected total',1),...Array(9).fill(0).map(()=>xcell('',1)),
+    xcell(D.selUnits,3),xcell(D.selTotal,7),xcell('',1)]);
+
+  downloadBytes(makeXlsxBook([
+    {name:'Delivered', aoa:s1, filter:true, filterEnd:s1End, first:true,
+     colW:[16,20,11,12,11,12,12,12,10,15,13,30]},
+    {name:'Upcoming by month', aoa:s2, filter:true, filterEnd:s2End, colW:[18,13,11,16]},
+    {name:'On water', aoa:s3, filter:true, filterEnd:s3End,
+     colW:[10,16,20,11,12,11,12,12,13,14,10,15,13]},
+  ]), 'container-values-'+todayISO()+'.xlsx');
+  toast('Excel downloaded');
+}
+
 function viewReports(){
   const r=REPORTS.find(r=>r.id===reportsState.open);
   if(r && r.id==='avgTransit') return reportAvgTransit();
   if(r && r.id==='pnl') return reportPnl();
   if(r && r.id==='priceList') return reportPriceList();
+  if(r && r.id==='containerValues') return reportContainerValues();
   return reportsIndex();
 }
 function reportsIndex(){
@@ -3189,6 +3399,281 @@ function buyerMonths(){
     .sort((a,b)=>{ const oa=state.orders.find(o=>o.period===a), ob=state.orders.find(o=>o.period===b);
       return String(ob.periodISO||'').localeCompare(String(oa.periodISO||'')); });
 }
+
+/* ============ STOCK OVERVIEW ============
+   One row per order line, with a sub-row per shipment when the line went out in
+   more than one container. Built for watching where time is going: every duration
+   is derived from dates already captured, so nothing extra has to be typed in. */
+const STOCK_COLS=22;
+let stockFull=false;
+
+function isoPlusDays(iso, n){
+  if(!iso) return null;
+  const d=new Date(iso+'T00:00:00'); if(isNaN(d)) return null;
+  d.setDate(d.getDate()+n);
+  /* Built from local parts on purpose. toISOString() converts to UTC, and east of
+     Greenwich local midnight is the previous day there — which silently moved every
+     expected-delivery date a day earlier. */
+  const z=x=>String(x).padStart(2,'0');
+  return d.getFullYear()+'-'+z(d.getMonth()+1)+'-'+z(d.getDate());
+}
+function daysBetween(a,b){
+  if(!a||!b) return null;
+  const x=new Date(a+'T00:00:00'), y=new Date(b+'T00:00:00');
+  if(isNaN(x)||isNaN(y)) return null;
+  return Math.round((y-x)/86400000);
+}
+/* Each shipment of an order, with the stretches that explain its elapsed time:
+   harbour  = loaded -> sailed      (sitting at the load port)
+   transit  = sailed -> arrived     (on the water)
+   t/ship   = ts arrival -> ts sail (waiting at the transhipment port)
+   total    = loaded -> landed or expected to land */
+function stockLegs(o){
+  return orderAllocs(o).map((a,i)=>{
+    const c=a.c;
+    const expDeliv = c.eta? isoPlusDays(c.eta, ETA_BUFFER_DAYS) : null;
+    const landed   = c.status==='Delivered' ? (c.deliveredAt||null) : null;
+    return {
+      n:i+1, c, qty:a.l.qty,
+      stockReady:c.stockReady||null,
+      loadDate:c.loadDate||null, etd:c.etd||null, eta:c.eta||null,
+      expDeliv, landed,
+      /* Stock sitting finished at the factory before it is loaded. */
+      waiting: daysBetween(c.stockReady, c.loadDate),
+      harbour: daysBetween(c.loadDate, c.etd),
+      transit: daysBetween(c.etd, c.eta),
+      tship:   c.transhipment? daysBetween(c.tsEta, c.tsEtd) : null,
+      total:   daysBetween(c.loadDate, landed||expDeliv),
+    };
+  });
+}
+/* The auto comment. Only the stretches that can be worked out are named, so a
+   container with half its dates missing says what it can rather than a row of
+   dashes. */
+function stockNote(parts, requiredEta, actualEta){
+  const bits=[];
+  if(parts.waiting!=null) bits.push('Ready\u2192load '+parts.waiting+'d');
+  if(parts.harbour!=null) bits.push('Harbour '+parts.harbour+'d');
+  if(parts.tship!=null)   bits.push('T/ship '+parts.tship+'d');
+  if(parts.transit!=null) bits.push('Transit '+parts.transit+'d');
+  if(parts.total!=null)   bits.push('Total '+parts.total+'d');
+  const slip = (requiredEta&&actualEta)? daysBetween(requiredEta, actualEta) : null;
+  if(slip!=null && slip>0) bits.push('ETA '+slip+'d late');
+  else if(slip!=null && slip<0) bits.push('ETA '+(-slip)+'d early');
+  return bits.join(' · ');
+}
+/* Roll the legs up to the order line. Start dates take the earliest leg (when the
+   order began moving); arrival dates take the latest (when the whole line is in). */
+function stockRow(o){
+  const st=orderStatus(o), s=orderStats(o), legs=stockLegs(o);
+  const min=(k)=>legs.reduce((a,l)=>(l[k]&&(!a||l[k]<a))?l[k]:a, null);
+  const max=(k)=>legs.reduce((a,l)=>(l[k]&&(!a||l[k]>a))?l[k]:a, null);
+  const sum=(k)=>{ const v=legs.map(l=>l[k]).filter(x=>x!=null); return v.length? Math.max(...v) : null; };
+  const stockReady=min('stockReady'), loadDate=min('loadDate'), etd=min('etd'), eta=max('eta');
+  const expDeliv=max('expDeliv');
+  const landedAll = legs.length && legs.every(l=>l.landed) ? max('landed') : null;
+  const span=daysBetween(loadDate, landedAll||expDeliv);
+  const agg={ waiting:sum('waiting'), harbour:sum('harbour'), tship:sum('tship'), transit:sum('transit'), total:span };
+  return {o, s, st, legs, stockReady, loadDate, etd, eta, expDeliv,
+    completed: orderCompletedDate(o),
+    late: buyerLate(o),
+    /* One shipment reads as a single journey. Several do not, so the line-level note
+       says so plainly rather than presenting the worst leg as though it were the whole
+       thing — the per-shipment detail is one click away in the expander. */
+    note: !legs.length? ''
+      : legs.length===1? stockNote(agg, o.plannedEta, eta)
+      : (()=>{ const b=[legs.length+' shipments'];
+          if(span!=null) b.push('Span '+span+'d');
+          if(agg.transit!=null) b.push('Worst transit '+agg.transit+'d');
+          if(agg.tship!=null) b.push('Worst T/ship '+agg.tship+'d');
+          const sl=(o.plannedEta&&eta)? daysBetween(o.plannedEta,eta) : null;
+          if(sl!=null&&sl>0) b.push('Last ETA '+sl+'d late');
+          else if(sl!=null&&sl<0) b.push('Last ETA '+(-sl)+'d early');
+          return b.join(' · '); })(),
+    container: legs.length===1? (legs[0].c.containerNo||'—') : (legs.length? legs.length+' shipments' : '—'),
+    vessel:    legs.length===1? (legs[0].c.vessel||'—') : (legs.length? '—' : '—')};
+}
+function stockMonths(){
+  const m=[...new Set(state.orders.map(o=>o.period).filter(Boolean))];
+  m.sort((a,b)=>{ const pa=state.orders.find(o=>o.period===a), pb=state.orders.find(o=>o.period===b);
+    return String(pb&&pb.periodISO||'').localeCompare(String(pa&&pa.periodISO||'')); });
+  return m;
+}
+function stockRows(){
+  const f=filters.stock;
+  const q=(f.q||'').toLowerCase();
+  let rows=state.orders.map(stockRow);
+  if(f.month!=='all') rows=rows.filter(r=>r.o.period===f.month);
+  if(f.status!=='all') rows=rows.filter(r=>r.st===f.status);
+  if(q) rows=rows.filter(r=>{
+    const hay=[r.o.code,r.o.profile,r.o.description,r.o.po,r.o.factory,
+      ...r.legs.map(l=>l.c.containerNo), ...r.legs.map(l=>l.c.vessel)].join(' ').toLowerCase();
+    return hay.includes(q);
+  });
+  rows.sort((a,b)=> String(a.o.factory||'').localeCompare(String(b.o.factory||''))
+    || String(a.o.code||'').localeCompare(String(b.o.code||''),undefined,{numeric:true})
+    || String(a.o.profile||'').localeCompare(String(b.o.profile||'')));
+  return rows;
+}
+function stockToggleFull(){
+  stockFull=!stockFull;
+  document.body.classList.toggle('cg-locked',stockFull);
+  render();
+}
+function stockExitFull(){ if(stockFull) stockToggleFull(); }
+function stockToggleRow(id){
+  expandedStock.has(id)?expandedStock.delete(id):expandedStock.add(id);
+  keepScroll(render);
+}
+function stockExpandAll(on){ expandedStock.clear();
+  if(on) stockRows().forEach(r=>{ if(r.legs.length>1) expandedStock.add(r.o.id); }); render(); }
+function stockSearch(v){ filters.stock.q=v; render();
+  const el=document.getElementById('stockQ'); if(el){ el.focus(); const n=el.value.length; el.setSelectionRange(n,n); } }
+
+function viewStock(){
+  const f=filters.stock, rows=stockRows(), months=stockMonths();
+  const split=rows.filter(r=>r.legs.length>1).length;
+  const tot=rows.reduce((a,r)=>({ord:a.ord+(r.o.orderQty||0), shipped:a.shipped+r.s.packed, os:a.os+r.s.outstanding}),{ord:0,shipped:0,os:0});
+  const d=x=>fmtDateShort(x);
+  const num=n=>n==null?'<span class="minor">—</span>':nf(n);
+
+  const head=`<tr>
+    <th style="min-width:30px"></th>
+    <th style="min-width:130px">Factory</th><th style="min-width:104px">Month</th>
+    <th style="min-width:86px">Code</th><th style="min-width:84px">Profile</th><th style="min-width:230px">Description</th>
+    <th class="num" style="min-width:76px">Ordered</th><th class="num" style="min-width:76px">Shipped</th><th class="num" style="min-width:66px">O/S</th>
+    <th style="min-width:98px">FP order date</th><th style="min-width:104px">Stock ready</th>
+    <th style="min-width:98px">Required ETD</th><th style="min-width:98px">Required ETA</th>
+    <th style="min-width:92px">Load date</th><th style="min-width:92px">Actual ETD</th><th style="min-width:92px">Actual ETA</th>
+    <th style="min-width:104px">Exp. delivery</th><th style="min-width:96px">Delivered</th>
+    <th style="min-width:124px">Container</th><th style="min-width:150px">Vessel</th>
+    <th class="num" style="min-width:62px">Late</th><th style="min-width:104px">Status</th>
+    <th style="min-width:250px">Transit notes</th></tr>`;
+
+  const body = rows.length? rows.map(r=>{
+    const o=r.o, open=expandedStock.has(o.id), multi=r.legs.length>1;
+    return `<tr class="cg-row ${open?'open':''}">
+      <td>${multi?`<button class="caret" title="Show each shipment" onclick="stockToggleRow('${o.id}')">
+        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="m9 18 6-6-6-6"/></svg></button>`:''}</td>
+      <td class="minor">${esc(o.factory||'—')}</td><td class="minor">${esc(o.period||'—')}</td>
+      <td class="mono" style="font-weight:600;color:var(--txt)">${esc(o.code||'')}</td>
+      <td>${esc(o.profile||'—')}</td>
+      <td class="desc-cell" title="${esc(o.description||'')}">${esc(o.description||'')}</td>
+      <td class="num mono">${nf(o.orderQty||0)}</td><td class="num mono">${nf(r.s.packed)}</td>
+      <td class="num mono"><b>${nf(r.s.outstanding)}</b></td>
+      <td class="mono">${d(o.fpConfirmed)}</td><td class="mono">${d(r.stockReady)}</td>
+      <td class="mono">${d(o.plannedEtd)}</td><td class="mono">${d(o.plannedEta)}</td>
+      <td class="mono">${d(r.loadDate)}</td><td class="mono">${d(r.etd)}</td><td class="mono">${d(r.eta)}</td>
+      <td class="mono">${d(r.expDeliv)}</td><td class="mono">${d(r.completed)}</td>
+      <td class="mono ${multi?'minor':''}">${esc(r.container)}</td><td>${esc(r.vessel)}</td>
+      <td class="num mono ${r.late>0?'late':''}">${r.late>0?r.late:(r.late!=null?'0':'–')}</td>
+      <td><span class="badge-st ${statusClass(r.st)}">${r.st}</span></td>
+      <td class="minor" style="font-size:11.5px">${esc(r.note||'—')}</td></tr>`+
+      (open? r.legs.map(l=>{
+        const ll=o.plannedEta? daysBetween(o.plannedEta, l.landed||l.expDeliv) : null;
+        return `<tr class="cg-row stock-sub"><td></td><td></td><td></td><td></td><td></td>
+          <td class="desc-cell"><span class="sub-arrow">&#8627;</span> Shipment ${l.n} of ${r.legs.length}</td>
+          <td></td><td class="num mono">${nf(l.qty)}</td><td></td>
+          <td></td><td class="mono">${d(l.stockReady)}</td><td></td><td></td>
+          <td class="mono">${d(l.loadDate)}</td><td class="mono">${d(l.etd)}</td><td class="mono">${d(l.eta)}</td>
+          <td class="mono">${d(l.expDeliv)}</td><td class="mono">${d(l.landed)}</td>
+          <td class="mono">${esc(l.c.containerNo||'—')}</td><td>${esc(l.c.vessel||'—')}</td>
+          <td class="num mono ${ll>0?'late':''}">${ll>0?ll:(ll!=null?'0':'–')}</td>
+          <td><span class="badge-st ${l.c.status==='Delivered'?'st-green':'st-blue'}">${l.c.status}</span></td>
+          <td class="minor" style="font-size:11.5px">${esc(stockNote(l, o.plannedEta, l.eta))}</td></tr>`;
+      }).join('') : '');
+  }).join('')
+  + `<tr class="group-row"><td colspan="6">Total — ${nf(rows.length)} line${rows.length===1?'':'s'}</td>
+     <td class="num">${nf(tot.ord)}</td><td class="num">${nf(tot.shipped)}</td><td class="num">${nf(tot.os)}</td>
+     <td colspan="14"></td></tr>`
+  : `<tr><td colspan="${STOCK_COLS+1}">${emptyBlock('Nothing to show','box','Adjust the month or status filter.')}</td></tr>`;
+
+  return `
+  <div class="print-head"><h1>Stock overview — ${esc(f.month==='all'?'All months':f.month)}</h1>
+    <p>Much Better Furniture · ${fmtDate(todayISO())}</p></div>
+  <div class="toolbar no-print">
+    <div class="search-wrap"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+      <input id="stockQ" placeholder="Code, description, PO, container, vessel…" value="${esc(f.q||'')}" oninput="stockSearch(this.value)"></div>
+    <select onchange="filters.stock.month=this.value;render()">
+      <option value="all" ${f.month==='all'?'selected':''}>All months</option>
+      ${months.map(m=>`<option ${f.month===m?'selected':''}>${esc(m)}</option>`).join('')}</select>
+    <select onchange="filters.stock.status=this.value;render()">
+      ${['all','In Production','Partial','On Water','Complete','Cancelled'].map(x=>
+        `<option value="${x}" ${f.status===x?'selected':''}>${x==='all'?'All statuses':x}</option>`).join('')}</select>
+    <button class="btn sm" onclick="stockExpandAll(true)">Expand all</button>
+    <button class="btn sm" onclick="stockExpandAll(false)">Collapse all</button>
+    <button class="btn sm" onclick="stockToggleFull()">${stockFull?'Exit full screen':'Full screen'}</button>
+    <button class="btn sm" onclick="exportStock()">Export to Excel</button>
+    <div style="flex:1"></div>
+    <span class="minor" style="font-size:12.5px">${nf(rows.length)} line${rows.length===1?'':'s'}${split?` · ${nf(split)} split across shipments`:''}</span>
+  </div>
+  <button class="btn sm cg-exit" onclick="stockExitFull()">Exit full screen (Esc)</button>
+  <div class="cg-wrap ${stockFull?'cg-full':''}"><table class="cg stock-tbl">
+    <thead>${head}</thead><tbody>${body}</tbody></table></div>`;
+}
+
+/* ---------- Excel ----------
+   Sheet 1 repeats the order's details on every shipment row, which is what makes it
+   pivot and filter properly. Sheet 2 is the same rows as the screen. */
+function exportStock(){
+  const rows=stockRows();
+  if(!rows.length){ toast('Nothing to export — check the filters'); return; }
+  const H=s=>xcell(s,5);
+  const HEAD=['Factory','Month','PO','Code','Profile','Description','Status',
+    'FP order date','Required ETD','Required ETA'];
+
+  const s1=[[...HEAD,'Shipment','Of','Qty','Stock ready','Load date','Actual ETD','Actual ETA','Exp. delivery','Delivered',
+    'Container','Vessel','Ready to load days','Harbour days','T/ship days','Transit days','Total days','Late days','Transit notes'].map(H)];
+  rows.forEach(r=>{
+    const o=r.o;
+    const base=[xcell(o.factory||''),xcell(o.period||''),xcell(o.po||''),xcell(o.code||''),xcell(o.profile||''),
+      xcell(o.description||''),xcell(r.st),
+      xdate(o.fpConfirmed),xdate(o.plannedEtd),xdate(o.plannedEta)];
+    if(!r.legs.length){
+      s1.push([...base,xcell(''),xcell(''),xcell(0,2),xcell(''),xcell(''),xcell(''),xcell(''),xcell(''),xcell(''),
+        xcell('(not yet shipped)'),xcell(''),xcell(''),xcell(''),xcell(''),xcell(''),xcell(''),xcell(''),xcell('')]);
+      return;
+    }
+    r.legs.forEach(l=>{
+      const ll=o.plannedEta? daysBetween(o.plannedEta, l.landed||l.expDeliv) : null;
+      s1.push([...base, xcell(l.n,2), xcell(r.legs.length,2), xcell(l.qty,2),
+        xdate(l.stockReady), xdate(l.loadDate), xdate(l.etd), xdate(l.eta), xdate(l.expDeliv), xdate(l.landed),
+        xcell(l.c.containerNo||''), xcell(l.c.vessel||''),
+        l.waiting!=null?xcell(l.waiting,2):xcell(''),
+        l.harbour!=null?xcell(l.harbour,2):xcell(''), l.tship!=null?xcell(l.tship,2):xcell(''),
+        l.transit!=null?xcell(l.transit,2):xcell(''), l.total!=null?xcell(l.total,2):xcell(''),
+        ll!=null?xcell(ll,2):xcell(''), xcell(stockNote(l,o.plannedEta,l.eta))]);
+    });
+  });
+  const s1End=s1.length;
+
+  const s2=[[...HEAD,'Ordered','Shipped','O/S','Stock ready','Load date','Actual ETD','Actual ETA','Exp. delivery','Delivered',
+    'Shipments','Container','Vessel','Late days','Transit notes'].map(H)];
+  let tOrd=0,tShip=0,tOs=0;
+  rows.forEach(r=>{
+    const o=r.o; tOrd+=o.orderQty||0; tShip+=r.s.packed; tOs+=r.s.outstanding;
+    s2.push([xcell(o.factory||''),xcell(o.period||''),xcell(o.po||''),xcell(o.code||''),xcell(o.profile||''),
+      xcell(o.description||''),xcell(r.st),
+      xdate(o.fpConfirmed),xdate(o.plannedEtd),xdate(o.plannedEta),
+      xcell(o.orderQty||0,2),xcell(r.s.packed,2),xcell(r.s.outstanding,2),
+      xdate(r.stockReady),xdate(r.loadDate),xdate(r.etd),xdate(r.eta),xdate(r.expDeliv),xdate(r.completed),
+      xcell(r.legs.length,2), xcell(r.legs.length===1?(r.legs[0].c.containerNo||''):''),
+      xcell(r.legs.length===1?(r.legs[0].c.vessel||''):''),
+      r.late!=null?xcell(r.late,2):xcell(''), xcell(r.note||'')]);
+  });
+  const s2End=s2.length;
+  s2.push([xcell('Total',1),...Array(9).fill(0).map(()=>xcell('',1)),
+    xcell(tOrd,3),xcell(tShip,3),xcell(tOs,3),...Array(11).fill(0).map(()=>xcell('',1))]);
+
+  downloadBytes(makeXlsxBook([
+    {name:'By shipment', aoa:s1, filter:true, filterEnd:s1End, first:true,
+     colW:[15,13,12,11,10,32,13,13,13,13,10,6,9,12,12,12,12,13,12,15,18,14,12,12,12,11,11,34]},
+    {name:'By order line', aoa:s2, filter:true, filterEnd:s2End,
+     colW:[15,13,12,11,10,32,13,13,13,13,10,10,9,12,12,12,12,13,12,11,15,18,11,34]},
+  ]), 'stock-overview-'+todayISO()+'.xlsx');
+  toast(`Excel downloaded — ${nf(rows.length)} line(s), ${nf(s1End-1)} shipment row(s)`);
+}
+
 function viewBuyer(){
   const months=buyerMonths();
   let sel=filters.buyer.month;
@@ -3219,8 +3704,8 @@ function viewBuyer(){
     <div class="tbl-wrap">
     ${any?`<table class="buyer-tbl"><thead><tr><th>Code</th><th>Profile</th><th>Description</th>
       <th class="num">Ordered</th><th class="num">Shipped</th><th class="num">O/S</th>
-      <th>Confirmed (FP)</th><th>Placed w/ supplier</th><th>Load date</th>
-      <th>Planned ETD</th><th>Actual ETD</th><th>Planned ETA</th><th>Exp. delivery</th><th>Completed</th><th class="num">Late</th><th>Status</th><th>Comment</th></tr></thead>
+      <th>FP order date</th><th>Placed w/ supplier</th><th>Load date</th>
+      <th>Required ETD</th><th>Actual ETD</th><th>Required ETA</th><th>Exp. delivery</th><th>Completed</th><th class="num">Late</th><th>Status</th><th>Comment</th></tr></thead>
     <tbody>${keys.map(k=>{ const list=groups[k].sort((a,b)=>(a.o.period||'').localeCompare(b.o.period||'')||String(a.o.code).localeCompare(String(b.o.code)));
       return `<tr class="group-row"><td colspan="17">${esc(k)} — ${list.length} line${list.length===1?'':'s'}</td></tr>`+
       list.map(({o,s,st})=>{ const cls=statusClass(st).replace('st-','b-'); const late=buyerLate(o); const exp=buyerExpDeliv(o);
@@ -3997,12 +4482,12 @@ function openOrderModal(editId){
           <div><label>PO number</label><input id="o_po" value="${esc(o.po||'')}" placeholder="e.g. PO-1042"></div>
         </div>
         <div class="field row">
-          <div><label>Order confirmed (FP)</label><input type="date" id="o_fpconf" value="${o.fpConfirmed||''}"></div>
+          <div><label>FP order date</label><input type="date" id="o_fpconf" value="${o.fpConfirmed||''}"></div>
           <div><label>Placed with supplier</label><input type="date" id="o_placed" value="${o.supplierPlaced||''}"></div>
         </div>
         <div class="field row">
-          <div><label>Planned ETD</label><input type="date" id="o_petd" value="${o.plannedEtd||''}"></div>
-          <div><label>Planned ETA</label><input type="date" id="o_peta" value="${o.plannedEta||''}"></div>
+          <div><label>Required ETD</label><input type="date" id="o_petd" value="${o.plannedEtd||''}"></div>
+          <div><label>Required ETA</label><input type="date" id="o_peta" value="${o.plannedEta||''}"></div>
         </div>
         ${lineEntryHTML(o)}
         <div class="field"><label>Description</label><input id="o_desc" value="${esc(o.description||'')}" placeholder="From the product — editable"></div>
@@ -4027,12 +4512,12 @@ function openOrderModal(editId){
         <div><label>PO number</label><input id="o_po" placeholder="e.g. PO-1042"></div>
       </div>
       <div class="field row">
-        <div><label>Order confirmed (FP)</label><input type="date" id="o_fpconf"></div>
+        <div><label>FP order date</label><input type="date" id="o_fpconf"></div>
         <div><label>Placed with supplier</label><input type="date" id="o_placed"></div>
       </div>
       <div class="field row">
-        <div><label>Planned ETD</label><input type="date" id="o_petd"></div>
-        <div><label>Planned ETA</label><input type="date" id="o_peta"></div>
+        <div><label>Required ETD</label><input type="date" id="o_petd"></div>
+        <div><label>Required ETA</label><input type="date" id="o_peta"></div>
       </div>
       <div class="entry-card">
         ${lineEntryHTML(null)}
@@ -4259,9 +4744,9 @@ function openOrderDetail(id){
         <div class="d-cell"><div class="dl">Order month</div><div class="dv">${esc(o.period)}</div></div>
         <div class="d-cell"><div class="dl">PO number</div><div class="dv mono">${esc(o.po||'—')}</div></div>
         <div class="d-cell"><div class="dl">Factory</div><div class="dv">${esc(o.factory||'—')}</div></div>
-        <div class="d-cell"><div class="dl">Confirmed (FP)</div><div class="dv mono">${fmtDateShort(o.fpConfirmed)}</div></div>
+        <div class="d-cell"><div class="dl">FP order date</div><div class="dv mono">${fmtDateShort(o.fpConfirmed)}</div></div>
         <div class="d-cell"><div class="dl">Placed with supplier</div><div class="dv mono">${fmtDateShort(o.supplierPlaced)}</div></div>
-        <div class="d-cell"><div class="dl">Planned ETD</div><div class="dv mono">${o.plannedEtd?fmtDateShort(new Date(o.plannedEtd+'T00:00:00')):'—'}</div></div>
+        <div class="d-cell"><div class="dl">Required ETD</div><div class="dv mono">${o.plannedEtd?fmtDateShort(new Date(o.plannedEtd+'T00:00:00')):'—'}</div></div>
         <div class="d-cell"><div class="dl">Planned ETA</div><div class="dv mono">${o.plannedEta?fmtDateShort(new Date(o.plannedEta+'T00:00:00')):'—'}</div></div>
         <div class="d-cell"><div class="dl">Ordered</div><div class="dv mono">${nf(o.orderQty)}</div></div>
         <div class="d-cell"><div class="dl">Outstanding</div><div class="dv mono">${nf(s.outstanding)}</div></div>
@@ -4388,6 +4873,11 @@ function openPackModal(editId, focusOrderId){
           <div><label>Shipping line</label><input id="c_line" list="lineList" value="${esc(c?c.line:'')}" placeholder="e.g. ONE">
             <datalist id="lineList">${LINES.map(l=>`<option value="${esc(l)}">`).join('')}</datalist></div>
           <div><label>Load date</label><input type="date" id="c_load" value="${c&&c.loadDate?c.loadDate:''}"></div>
+        </div>
+        <div class="field row">
+          <div><label>Stock ready date</label><input type="date" id="c_stockready" value="${c&&c.stockReady?c.stockReady:''}">
+            <div class="minor" style="font-size:11px;margin-top:3px">When the factory had this container's stock ready. The gap to the load date shows as waiting time.</div></div>
+          <div></div>
         </div>
         <div class="field row">
           <div><label>Port of load (POL)</label><select id="c_pol">
@@ -4636,7 +5126,7 @@ function savePackInner(id){
   const shipType = val('c_shipType')||'direct';
   const transhipment = shipType==='transhipment';
   const data={ containerNo:no, vessel:val('c_vessel').trim(), line:val('c_line').trim(),
-    loadDate:val('c_load')||null, etd:val('c_etd')||null, eta:val('c_eta')||null, comment:val('c_comment').trim(), link:val('c_link').trim(),
+    loadDate:val('c_load')||null, stockReady:val('c_stockready')||null, etd:val('c_etd')||null, eta:val('c_eta')||null, comment:val('c_comment').trim(), link:val('c_link').trim(),
     terminal:val('c_terminal')||'', finalVessel:!!(document.getElementById('c_finalVessel')||{}).checked,
     pol:val('c_pol')||'', containerType:val('c_ctype')||'',
     transhipment,
@@ -4731,7 +5221,7 @@ function bulkSelectionSummary(){
 function bulkClearTicks(){
   BULK_KEYS.forEach(k=>{ const chk=document.getElementById('bulk_chk_'+k); if(chk){ chk.checked=false; bulkToggle(k); } });
 }
-const BULK_KEYS=['vessel','line','loadDate','pol','containerType','etd','eta','terminal','finalVessel','shipType','tsEta','tsEtd','tsVessel'];
+const BULK_KEYS=['vessel','line','loadDate','stockReady','pol','containerType','etd','eta','terminal','finalVessel','shipType','tsEta','tsEtd','tsVessel'];
 function openBulkShipModal(){
   if(selectedContainers.size===0){ toast('Select at least one container'); return; }
   const n=selectedContainers.size;
@@ -4743,6 +5233,7 @@ function openBulkShipModal(){
       ${bulkField('vessel','Vessel','text','e.g. NYK FURANO 1028W')}
       ${bulkField('line','Shipping line','text','e.g. ONE','lineList')}<datalist id="lineList">${LINES.map(l=>`<option value="${esc(l)}">`).join('')}</datalist>
       ${bulkField('loadDate','Load date','date')}
+      ${bulkField('stockReady','Stock ready date','date')}
       ${bulkFieldSelect('pol','Port of load (POL)',[['','— Select —'],['Hebei','Hebei'],['Shenzhen','Shenzhen']])}
       ${bulkFieldSelect('containerType','Container type',[['','— Select —'],['40HQ','40HQ'],['40NOR','40NOR']])}
       ${bulkField('etd','ETD','date')}
@@ -4784,6 +5275,7 @@ function applyBulkShip(){
     if('loadDate' in patch) c.loadDate=patch.loadDate;
     if('pol' in patch) c.pol=patch.pol;
     if('containerType' in patch) c.containerType=patch.containerType;
+    if('stockReady' in patch) c.stockReady=patch.stockReady;
     if('etd' in patch) c.etd=patch.etd;
     if('eta' in patch) c.eta=patch.eta;
     if('terminal' in patch) c.terminal=patch.terminal;
