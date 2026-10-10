@@ -620,6 +620,9 @@ body.side-hidden .menu-toggle{display:grid!important}
 .buyer-tbl tr.brow-sub td{background:var(--bg-2);color:var(--txt-2);font-size:11.5px;padding-top:4px;padding-bottom:4px}
 .buyer-tbl tr.brow-sub .sub-arrow{color:var(--txt-3);margin-right:2px}
 .buyer-tbl tr.brow-sub td.late,.buyer-tbl tr.brow-sub td .late{color:var(--red)}
+/* The whole point of this one is density: tighter rows and a smaller face than the
+   other tables, so a long outstanding list fits on one screen. */
+.po-tools{margin-bottom:8px;gap:8px}
 /* Nearly complete sits between Partial and Complete, so it needs to read as its own
    thing rather than another amber pill — a filled badge, not a tinted one. */
 .badge-st.st-nearly{background:var(--amber);color:#1b1206;font-weight:700}
@@ -639,9 +642,7 @@ td.so-ready{padding-top:2px;padding-bottom:2px}
   min-width:250px;flex:0 1 320px}
 .so-search:focus{outline:none;border-color:var(--accent)}
 .so-tools{margin-bottom:8px;gap:8px}
-.so-wrap{max-height:calc(100vh - 150px)}
-.so-wrap.cg-full{max-height:none}
-@media (max-width:900px){ .so-wrap{max-height:calc(100vh - 132px)} .so-search{flex:1 1 100%} }
+@media (max-width:900px){ .so-search{flex:1 1 100%} }
 /* Shipment sub-rows inside the Stock overview. */
 /* A ticked container in the value picker. */
 tr.cv-on td{background:var(--accent-soft)}
@@ -657,6 +658,20 @@ body.cg-locked{overflow:hidden}
 .cg-exit{position:fixed;top:12px;right:16px;z-index:201;display:none}
 body.cg-locked .cg-exit{display:inline-flex}
 @media (max-width:900px){ .cg-wrap{max-height:calc(100vh - 168px)} }
+/* The report tables have a slimmer toolbar above them than the Containers grid, so they
+   can claim more height. These must sit AFTER .cg-wrap and carry both classes — an
+   earlier, equal-specificity .so-wrap rule simply lost on source order and did nothing. */
+.cg-wrap.so-wrap,.cg-wrap.po-wrap{max-height:calc(100vh - 150px)}
+.cg-wrap.so-wrap.cg-full,.cg-wrap.po-wrap.cg-full{max-height:none}
+@media (max-width:900px){ .cg-wrap.so-wrap,.cg-wrap.po-wrap{max-height:calc(100vh - 132px)} }
+/* PO outstanding is the one deliberately dense table: shorter rows and a smaller face
+   so a long backlog fits on one screen. These override table.cg, so they must come
+   after it — at equal specificity the later rule wins and the earlier one is dead. */
+table.cg.po-tbl td{height:26px;font-size:12px;padding:0 8px}
+table.cg.po-tbl thead th{font-size:10px;padding:5px 8px}
+/* These now out-specify the blanket print rule for .cg-wrap below, so they have to
+   release the height themselves or a printed report stops at one page of rows. */
+@media print{ .cg-wrap.so-wrap,.cg-wrap.po-wrap{max-height:none;overflow:visible} }
 table.cg{border-collapse:separate;border-spacing:0;width:100%;white-space:nowrap}
 table.cg th{position:sticky;top:0;z-index:5;background:var(--panel-2);color:var(--txt-2);
   font-size:10.5px;text-transform:uppercase;letter-spacing:.55px;font-weight:700;padding:0;
@@ -2542,6 +2557,9 @@ const REPORTS=[
   {id:'pnl', name:'Profit & Loss', tag:'Finance',
    desc:'Selling less landed cost for every delivered container added to the P&L, by month, with full workings.',
    icon:'M3 3v18h18M7 15l4-4 3 3 5-6'},
+  {id:'poOutstanding', name:'PO outstanding', tag:'Orders',
+   desc:'One tight line per order still owing: what was ordered, what shipped, and the month it lands.',
+   icon:'M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2M9 5a2 2 0 0 0 2 2h2a2 2 0 0 0 2-2M9 5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2M9 14h6M9 17h3'},
   {id:'containerValues', name:'Container values', tag:'Finance',
    desc:'What each container is worth — delivered, by upcoming month, and any set of on-water containers you pick.',
    icon:'M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4M9 12.5 15 9'},
@@ -2603,6 +2621,129 @@ function cvSelectMonth(label){
   rows.forEach(r=>allOn?cvSel.delete(r.c.id):cvSel.add(r.c.id));
   keepScroll(render);
 }
+
+/* ============ PO OUTSTANDING ============
+   Deliberately narrow: one row per order line that still owes something, and nothing
+   that needs clicking. The one piece of real work is the Arriving column, which turns
+   the shipped quantity into "how much lands, and when". */
+let poOut={q:'', month:'all', factory:'all'};
+function poArriving(o){
+  /* On-water legs grouped by the month they are expected to land. Delivered legs are
+     counted separately — they are in the warehouse, not arriving. */
+  const buckets=new Map(); let landed=0, noDate=0;
+  orderAllocs(o).forEach(({c,l})=>{
+    if(c.status==='Delivered'){ landed+=l.qty; return; }
+    const d=expDelivOf(c);
+    if(!d){ noDate+=l.qty; return; }
+    const k=monthKey(d);
+    const b=buckets.get(k)||{key:k, label:monthLabel(d), qty:0};
+    b.qty+=l.qty; buckets.set(k,b);
+  });
+  const months=[...buckets.values()].sort((a,b)=>a.key.localeCompare(b.key));
+  return {months, landed, noDate};
+}
+function poArrivingText(a){
+  const bits=a.months.map(m=>nf(m.qty)+' '+m.label);
+  if(a.noDate) bits.push(nf(a.noDate)+' no ETA');
+  return bits.join(' · ');
+}
+function poRows(){
+  const q=(poOut.q||'').toLowerCase();
+  let rows=state.orders.map(o=>({o, s:orderStats(o), a:poArriving(o)}))
+    .filter(r=>r.s.outstanding>0);                 // the point of the report
+  if(poOut.month!=='all') rows=rows.filter(r=>r.o.period===poOut.month);
+  if(poOut.factory!=='all') rows=rows.filter(r=>(r.o.factory||'')===poOut.factory);
+  if(q) rows=rows.filter(r=>[r.o.code,r.o.profile,r.o.description,r.o.po,r.o.factory]
+    .join(' ').toLowerCase().includes(q));
+  rows.sort((a,b)=> String(a.o.po||'~').localeCompare(String(b.o.po||'~'))
+    || String(a.o.code||'').localeCompare(String(b.o.code||''),undefined,{numeric:true})
+    || String(a.o.profile||'').localeCompare(String(b.o.profile||'')));
+  return rows;
+}
+function poMonths(){
+  const m=[...new Set(state.orders.filter(o=>orderStats(o).outstanding>0).map(o=>o.period).filter(Boolean))];
+  m.sort((a,b)=>{ const pa=state.orders.find(o=>o.period===a), pb=state.orders.find(o=>o.period===b);
+    return String(pb&&pb.periodISO||'').localeCompare(String(pa&&pa.periodISO||'')); });
+  return m;
+}
+function poFactories(){
+  return [...new Set(state.orders.filter(o=>orderStats(o).outstanding>0)
+    .map(o=>o.factory).filter(Boolean))].sort();
+}
+function poSearch(v){ poOut.q=v; render();
+  const el=document.getElementById('poQ'); if(el){ el.focus(); const n=el.value.length; el.setSelectionRange(n,n); } }
+
+function reportPoOutstanding(){
+  const rows=poRows(), months=poMonths(), facts=poFactories();
+  const t=rows.reduce((a,r)=>({ord:a.ord+(r.o.orderQty||0), ship:a.ship+r.s.packed, os:a.os+r.s.inProduction}),
+    {ord:0,ship:0,os:0});
+  return `
+  <div class="print-head"><h1>PO outstanding</h1><p>Much Better Furniture · ${fmtDate(todayISO())}</p></div>
+  <div class="toolbar no-print po-tools">
+    <button class="btn sm" onclick="closeReport()"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="m15 18-6-6 6-6"/></svg> All reports</button>
+    <input id="poQ" class="so-search" placeholder="Search code, description, PO…" value="${esc(poOut.q||'')}" oninput="poSearch(this.value)">
+    <select class="filter" onchange="poOut.month=this.value;render()">
+      <option value="all" ${poOut.month==='all'?'selected':''}>All months</option>
+      ${months.map(m=>`<option ${poOut.month===m?'selected':''}>${esc(m)}</option>`).join('')}</select>
+    <select class="filter" onchange="poOut.factory=this.value;render()">
+      <option value="all" ${poOut.factory==='all'?'selected':''}>All factories</option>
+      ${facts.map(f=>`<option ${poOut.factory===f?'selected':''}>${esc(f)}</option>`).join('')}</select>
+    <button class="btn sm" onclick="exportPoOutstanding()">Export</button>
+    <button class="btn sm" onclick="window.print()">Print</button>
+    <div style="flex:1"></div>
+    <span class="minor" style="font-size:12.5px">${nf(rows.length)} line${rows.length===1?'':'s'} owing</span>
+  </div>
+  <div class="cg-wrap po-wrap">
+    ${rows.length?`<table class="cg po-tbl">
+      <thead><tr>
+        <th style="min-width:80px">Code</th><th style="min-width:76px">Profile</th>
+        <th style="min-width:200px">Description</th>
+        <th style="min-width:86px">PO</th><th style="min-width:90px">Month</th>
+        <th class="num" style="min-width:66px">Ord</th>
+        <th class="num" style="min-width:66px">Ship</th>
+        <th class="num" style="min-width:68px" title="Still to ship — ordered less everything already loaded">To ship</th>
+        <th style="min-width:150px">Arriving</th></tr></thead>
+      <tbody>${rows.map(r=>{ const o=r.o, a=r.a;
+        return `<tr class="cg-row">
+          <td class="mono" style="font-weight:600;color:var(--txt)">${esc(o.code||'')}</td>
+          <td>${esc(o.profile||'—')}</td>
+          <td class="desc-cell" title="${esc(o.description||'')}">${esc(o.description||'')}</td>
+          <td class="mono minor">${esc(o.po||'—')}</td>
+          <td class="minor">${esc(o.period||'—')}</td>
+          <td class="num mono">${nf(o.orderQty||0)}</td>
+          <td class="num mono">${r.s.packed?nf(r.s.packed):'<span class="minor">—</span>'}</td>
+          <td class="num mono">${r.s.inProduction?`<b>${nf(r.s.inProduction)}</b>`:'<span class="minor">—</span>'}</td>
+          <td class="mono" style="font-size:11.5px">${a.months.length||a.noDate
+            ? esc(poArrivingText(a))
+            : '<span class="minor">not shipped</span>'}${a.landed?`<span class="minor"> · ${nf(a.landed)} landed</span>`:''}</td>
+        </tr>`;}).join('')}
+        <tr class="group-row"><td colspan="5">Total — ${nf(rows.length)} line${rows.length===1?'':'s'}</td>
+          <td class="num">${nf(t.ord)}</td><td class="num">${nf(t.ship)}</td><td class="num">${nf(t.os)}</td><td></td></tr>
+      </tbody></table>`
+    : emptyBlock('Nothing outstanding','done','Every order line on these filters is fully delivered.')}
+  </div>`;
+}
+function exportPoOutstanding(){
+  const rows=poRows();
+  if(!rows.length){ toast('Nothing outstanding to export'); return; }
+  const H=x=>xcell(x,5);
+  const aoa=[['Code','Profile','Description','PO','Month','Factory','Ordered','Shipped','To ship','Arriving','Landed'].map(H)];
+  let tO=0,tS=0,tU=0;
+  rows.forEach(r=>{ const o=r.o;
+    tO+=o.orderQty||0; tS+=r.s.packed; tU+=r.s.inProduction;
+    aoa.push([xcell(o.code||''),xcell(o.profile||''),xcell(o.description||''),xcell(o.po||''),
+      xcell(o.period||''),xcell(o.factory||''),
+      xcell(o.orderQty||0,2),xcell(r.s.packed,2),xcell(r.s.inProduction,2),
+      xcell(poArrivingText(r.a)),xcell(r.a.landed,2)]);
+  });
+  const end=aoa.length;
+  aoa.push([xcell('Total',1),xcell('',1),xcell('',1),xcell('',1),xcell('',1),xcell('',1),
+    xcell(tO,3),xcell(tS,3),xcell(tU,3),xcell('',1),xcell('',1)]);
+  downloadBytes(makeXlsxBook([{name:'PO outstanding', aoa, filter:true, filterEnd:end, first:true,
+    colW:[11,11,34,13,13,15,10,10,12,26,10]}]), 'po-outstanding-'+todayISO()+'.xlsx');
+  toast('Excel downloaded');
+}
+
 function reportContainerValues(){
   const D=cvData();
   const d=x=>fmtDateShort(x);
@@ -2713,6 +2854,7 @@ function viewReports(){
   if(r && r.id==='pnl') return reportPnl();
   if(r && r.id==='priceList') return reportPriceList();
   if(r && r.id==='containerValues') return reportContainerValues();
+  if(r && r.id==='poOutstanding') return reportPoOutstanding();
   return reportsIndex();
 }
 function reportsIndex(){
