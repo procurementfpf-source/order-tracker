@@ -620,6 +620,18 @@ body.side-hidden .menu-toggle{display:grid!important}
 .buyer-tbl tr.brow-sub td{background:var(--bg-2);color:var(--txt-2);font-size:11.5px;padding-top:4px;padding-bottom:4px}
 .buyer-tbl tr.brow-sub .sub-arrow{color:var(--txt-3);margin-right:2px}
 .buyer-tbl tr.brow-sub td.late,.buyer-tbl tr.brow-sub td .late{color:var(--red)}
+/* Nearly complete sits between Partial and Complete, so it needs to read as its own
+   thing rather than another amber pill — a filled badge, not a tinted one. */
+.badge-st.st-nearly{background:var(--amber);color:#1b1206;font-weight:700}
+.badge-st.st-nearly::before{background:#1b1206}
+/* The order-ready cell is editable in place, so it has to look like a field without
+   making the row taller than its neighbours. */
+.so-date{width:100%;min-width:104px;padding:3px 5px;border-radius:6px;border:1px solid transparent;
+  background:transparent;color:var(--txt);font-family:'JetBrains Mono',monospace;font-size:12px}
+.so-date:hover{border-color:var(--line);background:var(--bg-2)}
+.so-date:focus{outline:none;border-color:var(--accent);background:var(--bg-2)}
+td.so-ready{padding-top:2px;padding-bottom:2px}
+@media print{ .so-date{border:none;background:none;padding:0} }
 /* Stock overview chrome: the search sits in the row with the buttons rather than in a
    box of its own, and the toolbar is kept tight so the table gets the height. */
 .so-search{padding:8px 12px;border-radius:var(--radius-s);border:1px solid var(--line);
@@ -1419,9 +1431,9 @@ function openPoModal(key, focus){
             qty:o.orderQty, price:(o.price!=null&&o.price!=='')?o.price:null, packed:s.packed, delivered:s.delivered}; }) };
   const uniq=k=>[...new Set(g.orders.map(o=>o[k]||''))];
   const pos=uniq('po'), months=uniq('periodISO'), etds=uniq('plannedEtd'), etas=uniq('plannedEta');
-  const fps=uniq('fpConfirmed'), pls=uniq('supplierPlaced');
+  const fps=uniq('fpConfirmed'), pls=uniq('supplierPlaced'), rdys=uniq('orderReady');
   const mixed=[pos.length>1?'PO number':'',months.length>1?'order month':'',etds.length>1?'required ETD':'',etas.length>1?'required ETA':'',
-    fps.length>1?'FP order date':'',pls.length>1?'date placed with supplier':''].filter(Boolean);
+    fps.length>1?'FP order date':'',pls.length>1?'date placed with supplier':'',rdys.length>1?'order ready date':''].filter(Boolean);
   const ov=document.getElementById('overlay');
   ov.innerHTML=`<div class="modal wide"><div class="modal-head">
     <div><h3>Edit PO</h3><p>Change the PO details, adjust existing lines, or add new ones</p></div>
@@ -1436,6 +1448,11 @@ function openPoModal(key, focus){
       <div class="field row">
         <div><label>FP order date</label><input type="date" id="po_fpconf" value="${esc(fps[0]||'')}"></div>
         <div><label>Placed with supplier</label><input type="date" id="po_placed" value="${esc(pls[0]||'')}"></div>
+      </div>
+      <div class="field row">
+        <div><label>Order ready date</label><input type="date" id="po_ready" value="${esc(rdys[0]||'')}">
+          <div class="minor" style="font-size:11px;margin-top:3px">Saving applies this to every line on the PO. Per-line differences are set in Stock overview.</div></div>
+        <div></div>
       </div>
       <div class="field row">
         <div><label>Required ETD</label><input type="date" id="po_petd" value="${esc(etds[0]||'')}"></div>
@@ -1520,6 +1537,7 @@ function savePoEdit(){
   const po=val('po_po').trim();
   const plannedEtd=val('po_petd')||null, plannedEta=val('po_peta')||null;
   const fpConfirmed=val('po_fpconf')||null, supplierPlaced=val('po_placed')||null;
+  const orderReady=val('po_ready')||null;
   const periodLabel=new Date(month+'-01T00:00:00').toLocaleDateString('en-GB',{month:'long',year:'numeric'});
   const key=poEdit.key;
 
@@ -1532,12 +1550,12 @@ function savePoEdit(){
   poEdit.existing.forEach(l=>{ const o=order(l.id); if(!o) return;
     o.orderGroup=key; o.po=po; o.period=periodLabel; o.periodISO=month;
     o.plannedEtd=plannedEtd; o.plannedEta=plannedEta;
-    o.fpConfirmed=fpConfirmed; o.supplierPlaced=supplierPlaced;
+    o.fpConfirmed=fpConfirmed; o.supplierPlaced=supplierPlaced; o.orderReady=orderReady;
     o.orderQty=+l.qty; o.price=(l.price!=null&&l.price!=='')?+l.price:null; });
   // append any new lines to this same PO
   orderLines.forEach(l=>{ const p=productByCode(l.code);
     state.orders.push({ id:uid('o'), createdAt:Date.now(), orderGroup:key, period:periodLabel, periodISO:month, po, plannedEtd, plannedEta,
-      fpConfirmed, supplierPlaced,
+      fpConfirmed, supplierPlaced, orderReady,
       code:l.code, description:l.description||(p?p.description:'')||'', profile:l.profile||'',
       price:(l.price!=null&&l.price!=='')?+l.price:(p&&p.price!=null&&p.price!==''?+p.price:null),
       rmbPrice:(l.rmbPrice!=null&&l.rmbPrice!=='')?+l.rmbPrice:(p&&p.rmbPrice!=null&&p.rmbPrice!==''?+p.rmbPrice:null),
@@ -1618,7 +1636,6 @@ const CG_COLS=[
   {k:'line', t:'Line', w:92, filter:true},
   {k:'containerType', t:'Type', w:74, filter:true},
   {k:'terminal', t:'Terminal', w:88, filter:true},
-  {k:'stockReady', t:'Stock ready', w:96, cls:'mono', filter:true, off:true, cell:c=>fmtDateShort(c.stockReady)},
   {k:'loadDate', t:'Load date', w:92, cls:'mono', filter:true, off:true, cell:c=>fmtDateShort(c.loadDate)},
   {k:'etd', t:'ETD', w:88, cls:'mono', filter:true, print:true, cell:c=>fmtDateShort(c.etd)},
   {k:'eta', t:'ETA', w:88, cls:'mono', filter:true, print:true, cell:c=>fmtDateShort(c.eta)},
@@ -1842,13 +1859,13 @@ function exportContainers(){
   const stat=c=>c.status==='Delivered'?'Delivered':(c.finalVessel===false?'Vessel TBC':'On water');
 
   /* -- sheet 1: stock by container -- */
-  const s1=[[ 'Factory','Container no','POL','Vessel','Line','Type','Terminal','Stock ready','Load date','ETD','ETA','Expected',
+  const s1=[[ 'Factory','Container no','POL','Vessel','Line','Type','Terminal','Load date','ETD','ETA','Expected',
               'Status','Code','Profile','Description','Order month','Qty' ].map(H)];
   let qtyTot=0;
   cs.forEach(c=>{
     const head=[ xcell(containerFactory(c)||''), xcell((c.containerNo||'').replace(/\s+/g,'')), xcell(c.pol||''),
       xcell(c.vessel||''), xcell(c.line||''), xcell(c.containerType||''), xcell(c.terminal||''),
-      xdate(c.stockReady), xdate(c.loadDate), xdate(c.etd), xdate(c.eta), xdate(exp(c)), xcell(stat(c)) ];
+      xdate(c.loadDate), xdate(c.etd), xdate(c.eta), xdate(exp(c)), xcell(stat(c)) ];
     const lines=c.lines||[];
     if(!lines.length){
       /* An empty container still gets a row, so it is not silently missing from the sheet. */
@@ -1863,10 +1880,10 @@ function exportContainers(){
     });
   });
   const s1DataEnd=s1.length;
-  s1.push([ xcell('Total',1), ...Array(16).fill(0).map(()=>xcell('',1)), xcell(qtyTot,3) ]);
+  s1.push([ xcell('Total',1), ...Array(15).fill(0).map(()=>xcell('',1)), xcell(qtyTot,3) ]);
 
   /* -- sheet 2: containers -- */
-  const s2=[[ 'Factory','Container no','POL','Vessel','Line','Type','Terminal','Stock ready','Load date','ETD','ETA','Expected',
+  const s2=[[ 'Factory','Container no','POL','Vessel','Line','Type','Terminal','Load date','ETD','ETA','Expected',
               'Transit (days)','Transhipment','Comment','Units','Status' ].map(H)];
   let unitTot=0;
   cs.forEach(c=>{
@@ -1874,19 +1891,19 @@ function exportContainers(){
     const t=transitDays(c);
     s2.push([ xcell(containerFactory(c)||''), xcell((c.containerNo||'').replace(/\s+/g,'')), xcell(c.pol||''),
       xcell(c.vessel||''), xcell(c.line||''), xcell(c.containerType||''), xcell(c.terminal||''),
-      xdate(c.stockReady), xdate(c.loadDate), xdate(c.etd), xdate(c.eta), xdate(exp(c)),
+      xdate(c.loadDate), xdate(c.etd), xdate(c.eta), xdate(exp(c)),
       t==null? xcell('') : xcell(t,2),
       xcell(c.transhipment? `${c.tsEta||''} → ${c.tsEtd||''}${c.tsVessel?' · '+c.tsVessel:''}` : ''),
       xcell(c.comment||''), xcell(u,2), xcell(stat(c)) ]);
   });
   const s2DataEnd=s2.length;
-  s2.push([ xcell('Total',1), ...Array(14).fill(0).map(()=>xcell('',1)), xcell(unitTot,3), xcell('',1) ]);
+  s2.push([ xcell('Total',1), ...Array(13).fill(0).map(()=>xcell('',1)), xcell(unitTot,3), xcell('',1) ]);
 
   downloadBytes(makeXlsxBook([
     { name:'Stock by container', aoa:s1, filter:true, filterEnd:s1DataEnd, first:true,
-      colW:[16,15,11,20,11,8,10,12,11,11,11,11,11,11,11,34,14,9] },
+      colW:[16,15,11,20,11,8,10,11,11,11,11,11,11,11,34,14,9] },
     { name:'Containers', aoa:s2, filter:true, filterEnd:s2DataEnd,
-      colW:[16,15,11,20,11,8,10,12,11,11,11,11,13,30,30,9,11] },
+      colW:[16,15,11,20,11,8,10,11,11,11,11,13,30,30,9,11] },
   ]), 'containers-'+todayISO()+'.xlsx');
   toast(`Excel downloaded — ${cs.length} container${cs.length===1?'':'s'}, ${s1DataEnd-1} row${s1DataEnd===2?'':'s'}`);
 }
@@ -3460,17 +3477,18 @@ function daysBetween(a,b){
    t/ship   = ts arrival -> ts sail (waiting at the transhipment port)
    total    = loaded -> landed or expected to land */
 function stockLegs(o){
+  o=o||{};
   return orderAllocs(o).map((a,i)=>{
     const c=a.c;
     const expDeliv = c.eta? isoPlusDays(c.eta, ETA_BUFFER_DAYS) : null;
     const landed   = c.status==='Delivered' ? (c.deliveredAt||null) : null;
     return {
       n:i+1, c, qty:a.l.qty,
-      stockReady:c.stockReady||null,
       loadDate:c.loadDate||null, etd:c.etd||null, eta:c.eta||null,
       expDeliv, landed,
-      /* Stock sitting finished at the factory before it is loaded. */
-      waiting: daysBetween(c.stockReady, c.loadDate),
+      /* Stock sitting finished at the factory before it is loaded. The ready date is a
+         fact about the ORDER LINE, because one container often mixes months. */
+      waiting: daysBetween(o.orderReady, c.loadDate),
       harbour: daysBetween(c.loadDate, c.etd),
       transit: daysBetween(c.etd, c.eta),
       tship:   c.transhipment? daysBetween(c.tsEta, c.tsEtd) : null,
@@ -3483,7 +3501,12 @@ function stockLegs(o){
    dashes. */
 function stockNote(parts, requiredEta, actualEta){
   const bits=[];
-  if(parts.waiting!=null) bits.push('Ready\u2192load '+parts.waiting+'d');
+  /* A negative wait means the ready date falls after the container loaded, which cannot
+     happen — say so plainly instead of printing "-4d" and leaving it to be puzzled over. */
+  if(parts.waiting!=null){
+    bits.push(parts.waiting<0 ? 'Ready date is after loading \u2014 check it'
+                              : 'Ready\u2192load '+parts.waiting+'d');
+  }
   if(parts.harbour!=null) bits.push('Harbour '+parts.harbour+'d');
   if(parts.tship!=null)   bits.push('T/ship '+parts.tship+'d');
   if(parts.transit!=null) bits.push('Transit '+parts.transit+'d');
@@ -3500,12 +3523,13 @@ function stockRow(o){
   const min=(k)=>legs.reduce((a,l)=>(l[k]&&(!a||l[k]<a))?l[k]:a, null);
   const max=(k)=>legs.reduce((a,l)=>(l[k]&&(!a||l[k]>a))?l[k]:a, null);
   const sum=(k)=>{ const v=legs.map(l=>l[k]).filter(x=>x!=null); return v.length? Math.max(...v) : null; };
-  const stockReady=min('stockReady'), loadDate=min('loadDate'), etd=min('etd'), eta=max('eta');
+  const loadDate=min('loadDate'), etd=min('etd'), eta=max('eta');
   const expDeliv=max('expDeliv');
   const landedAll = legs.length && legs.every(l=>l.landed) ? max('landed') : null;
   const span=daysBetween(loadDate, landedAll||expDeliv);
   const agg={ waiting:sum('waiting'), harbour:sum('harbour'), tship:sum('tship'), transit:sum('transit'), total:span };
-  return {o, s, st, legs, stockReady, loadDate, etd, eta, expDeliv,
+  const ds=stockStatus(o, s, st);
+  return {o, s, st, ds, legs, loadDate, etd, eta, expDeliv,
     completed: orderCompletedDate(o),
     late: buyerLate(o),
     /* One shipment reads as a single journey. Several do not, so the line-level note
@@ -3524,6 +3548,24 @@ function stockRow(o){
     container: legs.length===1? (legs[0].c.containerNo||'—') : (legs.length? legs.length+' shipments' : '—'),
     vessel:    legs.length===1? (legs[0].c.vessel||'—') : (legs.length? '—' : '—')};
 }
+/* A line that is 92% shipped and one that is 5% shipped are both "Partial", which
+   makes a nearly-finished order look like one that has barely started. This adds a
+   display-only tier: still outstanding, but far enough along to treat as a tail to
+   chase rather than a delivery to plan around.
+   It is deliberately NOT called Complete — Complete means nothing is owed, and the
+   outstanding figure, the arrivals report and the O/S report all depend on that. A
+   line marked Complete with 100 units still due would quietly drop out of the lists
+   that exist to make you chase it. */
+const STOCK_NEARLY_PCT = 80;
+function stockStatus(o, s, st){
+  const ordered=o.orderQty||0;
+  const pct = ordered>0 ? Math.floor((s.packed/ordered)*100) : null;
+  const nearly = st==='Partial' && pct!=null && pct>=STOCK_NEARLY_PCT && s.outstanding>0;
+  if(nearly) return {label:'Nearly complete', cls:'st-nearly', pct, nearly:true};
+  /* The percentage is worth showing on any part-shipped line, not just the near ones. */
+  const showPct = (st==='Partial') && pct!=null;
+  return {label:st, cls:statusClass(st), pct:showPct?pct:null, nearly:false};
+}
 function stockMonths(){
   const m=[...new Set(state.orders.map(o=>o.period).filter(Boolean))];
   m.sort((a,b)=>{ const pa=state.orders.find(o=>o.period===a), pb=state.orders.find(o=>o.period===b);
@@ -3535,7 +3577,9 @@ function stockRows(){
   const q=(f.q||'').toLowerCase();
   let rows=state.orders.map(stockRow);
   if(f.month!=='all') rows=rows.filter(r=>r.o.period===f.month);
-  if(f.status!=='all') rows=rows.filter(r=>r.st===f.status);
+  /* Filter on the label actually shown, so picking "Nearly complete" does not come
+     back empty because the underlying status is still Partial. */
+  if(f.status!=='all') rows=rows.filter(r=>r.ds.label===f.status);
   if(q) rows=rows.filter(r=>{
     const hay=[r.o.code,r.o.profile,r.o.description,r.o.po,r.o.factory,
       ...r.legs.map(l=>l.c.containerNo), ...r.legs.map(l=>l.c.vessel)].join(' ').toLowerCase();
@@ -3552,6 +3596,12 @@ function stockToggleFull(){
   render();
 }
 function stockExitFull(){ if(stockFull) stockToggleFull(); }
+/* Edits one line only. The PO modal is still the way to set a whole order at once. */
+function setOrderReady(id, v){
+  const o=order(id); if(!o) return;
+  o.orderReady = v || null;
+  save(); keepScroll(render);
+}
 function stockToggleRow(id){
   expandedStock.has(id)?expandedStock.delete(id):expandedStock.add(id);
   keepScroll(render);
@@ -3573,7 +3623,7 @@ function viewStock(){
     <th style="min-width:130px">Factory</th><th style="min-width:104px">Month</th>
     <th style="min-width:86px">Code</th><th style="min-width:84px">Profile</th><th style="min-width:230px">Description</th>
     <th class="num" style="min-width:76px">Ordered</th><th class="num" style="min-width:76px">Shipped</th><th class="num" style="min-width:66px">O/S</th>
-    <th style="min-width:98px">FP order date</th><th style="min-width:104px">Stock ready</th>
+    <th style="min-width:98px">FP order date</th><th style="min-width:116px">Order ready</th>
     <th style="min-width:98px">Required ETD</th><th style="min-width:98px">Required ETA</th>
     <th style="min-width:92px">Load date</th><th style="min-width:92px">Actual ETD</th><th style="min-width:92px">Actual ETA</th>
     <th style="min-width:104px">Exp. delivery</th><th style="min-width:96px">Delivered</th>
@@ -3592,20 +3642,24 @@ function viewStock(){
       <td class="desc-cell" title="${esc(o.description||'')}">${esc(o.description||'')}</td>
       <td class="num mono">${nf(o.orderQty||0)}</td><td class="num mono">${nf(r.s.packed)}</td>
       <td class="num mono"><b>${nf(r.s.outstanding)}</b></td>
-      <td class="mono">${d(o.fpConfirmed)}</td><td class="mono">${d(r.stockReady)}</td>
+      <td class="mono">${d(o.fpConfirmed)}</td>
+      <td class="so-ready"><input type="date" class="so-date" value="${o.orderReady||''}"
+        title="Order ready date — edit just this line" onchange="setOrderReady('${o.id}',this.value)"></td>
       <td class="mono">${d(o.plannedEtd)}</td><td class="mono">${d(o.plannedEta)}</td>
       <td class="mono">${d(r.loadDate)}</td><td class="mono">${d(r.etd)}</td><td class="mono">${d(r.eta)}</td>
       <td class="mono">${d(r.expDeliv)}</td><td class="mono">${d(r.completed)}</td>
       <td class="mono ${multi?'minor':''}">${esc(r.container)}</td><td>${esc(r.vessel)}</td>
       <td class="num mono ${r.late>0?'late':''}">${r.late>0?r.late:(r.late!=null?'0':'–')}</td>
-      <td><span class="badge-st ${statusClass(r.st)}">${r.st}</span></td>
+      <td><span class="badge-st ${r.ds.cls}" title="${esc(r.ds.nearly
+        ? nf(r.s.inProduction)+' of '+nf(r.o.orderQty||0)+' not yet shipped \u00b7 '+nf(r.s.outstanding)+' still to land'
+        : r.st)}">${esc(r.ds.label)}${r.ds.pct!=null?' '+r.ds.pct+'%':''}</span></td>
       <td class="minor" style="font-size:11.5px">${esc(r.note||'—')}</td></tr>`+
       (open? r.legs.map(l=>{
         const ll=o.plannedEta? daysBetween(o.plannedEta, l.landed||l.expDeliv) : null;
         return `<tr class="cg-row stock-sub"><td></td><td></td><td></td><td></td><td></td>
           <td class="desc-cell"><span class="sub-arrow">&#8627;</span> Shipment ${l.n} of ${r.legs.length}</td>
           <td></td><td class="num mono">${nf(l.qty)}</td><td></td>
-          <td></td><td class="mono">${d(l.stockReady)}</td><td></td><td></td>
+          <td></td><td></td><td></td><td></td>
           <td class="mono">${d(l.loadDate)}</td><td class="mono">${d(l.etd)}</td><td class="mono">${d(l.eta)}</td>
           <td class="mono">${d(l.expDeliv)}</td><td class="mono">${d(l.landed)}</td>
           <td class="mono">${esc(l.c.containerNo||'—')}</td><td>${esc(l.c.vessel||'—')}</td>
@@ -3629,7 +3683,7 @@ function viewStock(){
       <option value="all" ${f.month==='all'?'selected':''}>All months</option>
       ${months.map(m=>`<option ${f.month===m?'selected':''}>${esc(m)}</option>`).join('')}</select>
     <select class="filter" onchange="filters.stock.status=this.value;render()">
-      ${['all','In Production','Partial','On Water','Complete','Cancelled'].map(x=>
+      ${['all','In Production','Partial','Nearly complete','On Water','Complete','Cancelled'].map(x=>
         `<option value="${x}" ${f.status===x?'selected':''}>${x==='all'?'All statuses':x}</option>`).join('')}</select>
     <button class="btn sm" onclick="stockExpandAll(true)">Expand all</button>
     <button class="btn sm" onclick="stockExpandAll(false)">Collapse all</button>
@@ -3651,24 +3705,24 @@ function exportStock(){
   if(!rows.length){ toast('Nothing to export — check the filters'); return; }
   const H=s=>xcell(s,5);
   const HEAD=['Factory','Month','PO','Code','Profile','Description','Status',
-    'FP order date','Required ETD','Required ETA'];
+    'FP order date','Order ready','Required ETD','Required ETA'];
 
-  const s1=[[...HEAD,'Shipment','Of','Qty','Stock ready','Load date','Actual ETD','Actual ETA','Exp. delivery','Delivered',
+  const s1=[[...HEAD,'Shipment','Of','Qty','Load date','Actual ETD','Actual ETA','Exp. delivery','Delivered',
     'Container','Vessel','Ready to load days','Harbour days','T/ship days','Transit days','Total days','Late days','Transit notes'].map(H)];
   rows.forEach(r=>{
     const o=r.o;
     const base=[xcell(o.factory||''),xcell(o.period||''),xcell(o.po||''),xcell(o.code||''),xcell(o.profile||''),
-      xcell(o.description||''),xcell(r.st),
-      xdate(o.fpConfirmed),xdate(o.plannedEtd),xdate(o.plannedEta)];
+      xcell(o.description||''),xcell(r.ds.label),
+      xdate(o.fpConfirmed),xdate(o.orderReady),xdate(o.plannedEtd),xdate(o.plannedEta)];
     if(!r.legs.length){
-      s1.push([...base,xcell(''),xcell(''),xcell(0,2),xcell(''),xcell(''),xcell(''),xcell(''),xcell(''),xcell(''),
+      s1.push([...base,xcell(''),xcell(''),xcell(0,2),xcell(''),xcell(''),xcell(''),xcell(''),xcell(''),
         xcell('(not yet shipped)'),xcell(''),xcell(''),xcell(''),xcell(''),xcell(''),xcell(''),xcell(''),xcell('')]);
       return;
     }
     r.legs.forEach(l=>{
       const ll=o.plannedEta? daysBetween(o.plannedEta, l.landed||l.expDeliv) : null;
       s1.push([...base, xcell(l.n,2), xcell(r.legs.length,2), xcell(l.qty,2),
-        xdate(l.stockReady), xdate(l.loadDate), xdate(l.etd), xdate(l.eta), xdate(l.expDeliv), xdate(l.landed),
+        xdate(l.loadDate), xdate(l.etd), xdate(l.eta), xdate(l.expDeliv), xdate(l.landed),
         xcell(l.c.containerNo||''), xcell(l.c.vessel||''),
         l.waiting!=null?xcell(l.waiting,2):xcell(''),
         l.harbour!=null?xcell(l.harbour,2):xcell(''), l.tship!=null?xcell(l.tship,2):xcell(''),
@@ -3678,16 +3732,16 @@ function exportStock(){
   });
   const s1End=s1.length;
 
-  const s2=[[...HEAD,'Ordered','Shipped','O/S','Stock ready','Load date','Actual ETD','Actual ETA','Exp. delivery','Delivered',
+  const s2=[[...HEAD,'Ordered','Shipped','O/S','Load date','Actual ETD','Actual ETA','Exp. delivery','Delivered',
     'Shipments','Container','Vessel','Late days','Transit notes'].map(H)];
   let tOrd=0,tShip=0,tOs=0;
   rows.forEach(r=>{
     const o=r.o; tOrd+=o.orderQty||0; tShip+=r.s.packed; tOs+=r.s.outstanding;
     s2.push([xcell(o.factory||''),xcell(o.period||''),xcell(o.po||''),xcell(o.code||''),xcell(o.profile||''),
-      xcell(o.description||''),xcell(r.st),
-      xdate(o.fpConfirmed),xdate(o.plannedEtd),xdate(o.plannedEta),
+      xcell(o.description||''),xcell(r.ds.label),
+      xdate(o.fpConfirmed),xdate(o.orderReady),xdate(o.plannedEtd),xdate(o.plannedEta),
       xcell(o.orderQty||0,2),xcell(r.s.packed,2),xcell(r.s.outstanding,2),
-      xdate(r.stockReady),xdate(r.loadDate),xdate(r.etd),xdate(r.eta),xdate(r.expDeliv),xdate(r.completed),
+      xdate(r.loadDate),xdate(r.etd),xdate(r.eta),xdate(r.expDeliv),xdate(r.completed),
       xcell(r.legs.length,2), xcell(r.legs.length===1?(r.legs[0].c.containerNo||''):''),
       xcell(r.legs.length===1?(r.legs[0].c.vessel||''):''),
       r.late!=null?xcell(r.late,2):xcell(''), xcell(r.note||'')]);
@@ -3698,9 +3752,9 @@ function exportStock(){
 
   downloadBytes(makeXlsxBook([
     {name:'By shipment', aoa:s1, filter:true, filterEnd:s1End, first:true,
-     colW:[15,13,12,11,10,32,13,13,13,13,10,6,9,12,12,12,12,13,12,15,18,14,12,12,12,11,11,34]},
+     colW:[15,13,12,11,10,32,13,13,13,13,13,10,6,9,12,12,12,13,12,15,18,14,12,12,12,11,11,34]},
     {name:'By order line', aoa:s2, filter:true, filterEnd:s2End,
-     colW:[15,13,12,11,10,32,13,13,13,13,10,10,9,12,12,12,12,13,12,11,15,18,11,34]},
+     colW:[15,13,12,11,10,32,13,13,13,13,13,10,10,9,12,12,12,13,12,11,15,18,11,34]},
   ]), 'stock-overview-'+todayISO()+'.xlsx');
   toast(`Excel downloaded — ${nf(rows.length)} line(s), ${nf(s1End-1)} shipment row(s)`);
 }
@@ -4517,6 +4571,11 @@ function openOrderModal(editId){
           <div><label>Placed with supplier</label><input type="date" id="o_placed" value="${o.supplierPlaced||''}"></div>
         </div>
         <div class="field row">
+          <div><label>Order ready date</label><input type="date" id="o_ready" value="${o.orderReady||''}">
+            <div class="minor" style="font-size:11px;margin-top:3px">When this line's stock was ready at the factory.</div></div>
+          <div></div>
+        </div>
+        <div class="field row">
           <div><label>Required ETD</label><input type="date" id="o_petd" value="${o.plannedEtd||''}"></div>
           <div><label>Required ETA</label><input type="date" id="o_peta" value="${o.plannedEta||''}"></div>
         </div>
@@ -4545,6 +4604,11 @@ function openOrderModal(editId){
       <div class="field row">
         <div><label>FP order date</label><input type="date" id="o_fpconf"></div>
         <div><label>Placed with supplier</label><input type="date" id="o_placed"></div>
+      </div>
+      <div class="field row">
+        <div><label>Order ready date</label><input type="date" id="o_ready">
+          <div class="minor" style="font-size:11px;margin-top:3px">Applied to every line on this order. Individual lines can be changed later in Stock overview.</div></div>
+        <div></div>
       </div>
       <div class="field row">
         <div><label>Required ETD</label><input type="date" id="o_petd"></div>
@@ -4723,11 +4787,12 @@ function saveOrderBatch(){
   const po=val('o_po').trim();
   const plannedEtd=val('o_petd')||null, plannedEta=val('o_peta')||null;
   const fpConfirmed=val('o_fpconf')||null, supplierPlaced=val('o_placed')||null;
+  const orderReady=val('o_ready')||null;
   const periodLabel=new Date(month+'-01T00:00:00').toLocaleDateString('en-GB',{month:'long',year:'numeric'});
   const grp=uid('grp');
   orderLines.forEach(l=>{ const p=productByCode(l.code);
     state.orders.push({ id:uid('o'), createdAt:Date.now(), orderGroup:grp, period:periodLabel, periodISO:month, po, plannedEtd, plannedEta,
-      fpConfirmed, supplierPlaced,
+      fpConfirmed, supplierPlaced, orderReady,
       code:l.code, description:l.description||(p?p.description:'')||'', profile:l.profile||'',
       price:(l.price!=null&&l.price!=='')?+l.price:(p&&p.price!=null&&p.price!==''?+p.price:null),
       rmbPrice:(l.rmbPrice!=null&&l.rmbPrice!=='')?+l.rmbPrice:(p&&p.rmbPrice!=null&&p.rmbPrice!==''?+p.rmbPrice:null),
@@ -4749,6 +4814,7 @@ function saveOrder(id){
   const data={ period:periodLabel, periodISO:month, po:val('o_po').trim(), code, description:desc, price, rmbPrice,
     plannedEtd:val('o_petd')||null, plannedEta:val('o_peta')||null,
     fpConfirmed:val('o_fpconf')||null, supplierPlaced:val('o_placed')||null,
+    orderReady:val('o_ready')||null,
     profile, factory:(p?p.factory:'')||order(id).factory||'', orderQty:qty, comment:val('o_comment').trim() };
   Object.assign(order(id), data); save(); closeModal(); render(); fillFactoryList(); toast('Order updated');
 }
@@ -4777,6 +4843,7 @@ function openOrderDetail(id){
         <div class="d-cell"><div class="dl">Factory</div><div class="dv">${esc(o.factory||'—')}</div></div>
         <div class="d-cell"><div class="dl">FP order date</div><div class="dv mono">${fmtDateShort(o.fpConfirmed)}</div></div>
         <div class="d-cell"><div class="dl">Placed with supplier</div><div class="dv mono">${fmtDateShort(o.supplierPlaced)}</div></div>
+        <div class="d-cell"><div class="dl">Order ready</div><div class="dv mono">${fmtDateShort(o.orderReady)}</div></div>
         <div class="d-cell"><div class="dl">Required ETD</div><div class="dv mono">${o.plannedEtd?fmtDateShort(new Date(o.plannedEtd+'T00:00:00')):'—'}</div></div>
         <div class="d-cell"><div class="dl">Planned ETA</div><div class="dv mono">${o.plannedEta?fmtDateShort(new Date(o.plannedEta+'T00:00:00')):'—'}</div></div>
         <div class="d-cell"><div class="dl">Ordered</div><div class="dv mono">${nf(o.orderQty)}</div></div>
@@ -4906,10 +4973,6 @@ function openPackModal(editId, focusOrderId){
           <div><label>Load date</label><input type="date" id="c_load" value="${c&&c.loadDate?c.loadDate:''}"></div>
         </div>
         <div class="field row">
-          <div><label>Stock ready date</label><input type="date" id="c_stockready" value="${c&&c.stockReady?c.stockReady:''}">
-            <div class="minor" style="font-size:11px;margin-top:3px">When the factory had this container's stock ready. The gap to the load date shows as waiting time.</div></div>
-          <div></div>
-        </div>
         <div class="field row">
           <div><label>Port of load (POL)</label><select id="c_pol">
             <option value="">— Select —</option>
@@ -5157,7 +5220,7 @@ function savePackInner(id){
   const shipType = val('c_shipType')||'direct';
   const transhipment = shipType==='transhipment';
   const data={ containerNo:no, vessel:val('c_vessel').trim(), line:val('c_line').trim(),
-    loadDate:val('c_load')||null, stockReady:val('c_stockready')||null, etd:val('c_etd')||null, eta:val('c_eta')||null, comment:val('c_comment').trim(), link:val('c_link').trim(),
+    loadDate:val('c_load')||null, etd:val('c_etd')||null, eta:val('c_eta')||null, comment:val('c_comment').trim(), link:val('c_link').trim(),
     terminal:val('c_terminal')||'', finalVessel:!!(document.getElementById('c_finalVessel')||{}).checked,
     pol:val('c_pol')||'', containerType:val('c_ctype')||'',
     transhipment,
@@ -5252,7 +5315,7 @@ function bulkSelectionSummary(){
 function bulkClearTicks(){
   BULK_KEYS.forEach(k=>{ const chk=document.getElementById('bulk_chk_'+k); if(chk){ chk.checked=false; bulkToggle(k); } });
 }
-const BULK_KEYS=['vessel','line','loadDate','stockReady','pol','containerType','etd','eta','terminal','finalVessel','shipType','tsEta','tsEtd','tsVessel'];
+const BULK_KEYS=['vessel','line','loadDate','pol','containerType','etd','eta','terminal','finalVessel','shipType','tsEta','tsEtd','tsVessel'];
 function openBulkShipModal(){
   if(selectedContainers.size===0){ toast('Select at least one container'); return; }
   const n=selectedContainers.size;
@@ -5264,7 +5327,6 @@ function openBulkShipModal(){
       ${bulkField('vessel','Vessel','text','e.g. NYK FURANO 1028W')}
       ${bulkField('line','Shipping line','text','e.g. ONE','lineList')}<datalist id="lineList">${LINES.map(l=>`<option value="${esc(l)}">`).join('')}</datalist>
       ${bulkField('loadDate','Load date','date')}
-      ${bulkField('stockReady','Stock ready date','date')}
       ${bulkFieldSelect('pol','Port of load (POL)',[['','— Select —'],['Hebei','Hebei'],['Shenzhen','Shenzhen']])}
       ${bulkFieldSelect('containerType','Container type',[['','— Select —'],['40HQ','40HQ'],['40NOR','40NOR']])}
       ${bulkField('etd','ETD','date')}
@@ -5306,7 +5368,6 @@ function applyBulkShip(){
     if('loadDate' in patch) c.loadDate=patch.loadDate;
     if('pol' in patch) c.pol=patch.pol;
     if('containerType' in patch) c.containerType=patch.containerType;
-    if('stockReady' in patch) c.stockReady=patch.stockReady;
     if('etd' in patch) c.etd=patch.etd;
     if('eta' in patch) c.eta=patch.eta;
     if('terminal' in patch) c.terminal=patch.terminal;
