@@ -708,7 +708,7 @@ tr.cg-row.open .caret svg{transform:rotate(90deg)}
 tr.cg-detail>td{padding:0;background:var(--bg-2);border-bottom:2px solid var(--line)}
 .cg-detail-inner{padding:10px 16px 12px 64px;white-space:normal}
 .cg-acts{display:flex;gap:5px;justify-content:flex-end}
-.cg-pop,.cg-cols{position:fixed;z-index:60;background:var(--panel);border:1px solid var(--line);
+.cg-pop,.cg-cols{position:fixed;z-index:300;background:var(--panel);border:1px solid var(--line);
   border-radius:var(--radius-s);box-shadow:var(--shadow);padding:8px;min-width:196px;max-width:270px;display:none}
 .cg-pop.open,.cg-cols.open{display:block}
 .cg-pop input.f{width:100%;background:var(--bg-2);border:1px solid var(--line);border-radius:6px;
@@ -1446,9 +1446,9 @@ function openPoModal(key, focus){
             qty:o.orderQty, price:(o.price!=null&&o.price!=='')?o.price:null, packed:s.packed, delivered:s.delivered}; }) };
   const uniq=k=>[...new Set(g.orders.map(o=>o[k]||''))];
   const pos=uniq('po'), months=uniq('periodISO'), etds=uniq('plannedEtd'), etas=uniq('plannedEta');
-  const fps=uniq('fpConfirmed'), pls=uniq('supplierPlaced'), rdys=uniq('orderReady');
+  const fps=uniq('fpConfirmed'), rdys=uniq('orderReady');
   const mixed=[pos.length>1?'PO number':'',months.length>1?'order month':'',etds.length>1?'required ETD':'',etas.length>1?'required ETA':'',
-    fps.length>1?'FP order date':'',pls.length>1?'date placed with supplier':'',rdys.length>1?'order ready date':''].filter(Boolean);
+    fps.length>1?'order placed date':'',rdys.length>1?'order ready date':''].filter(Boolean);
   const ov=document.getElementById('overlay');
   ov.innerHTML=`<div class="modal wide"><div class="modal-head">
     <div><h3>Edit PO</h3><p>Change the PO details, adjust existing lines, or add new ones</p></div>
@@ -1461,13 +1461,9 @@ function openPoModal(key, focus){
         <div><label>Order month <span class="req">*</span></label><input type="month" id="po_month" value="${esc(months[0]||'')}"></div>
       </div>
       <div class="field row">
-        <div><label>FP order date</label><input type="date" id="po_fpconf" value="${esc(fps[0]||'')}"></div>
-        <div><label>Placed with supplier</label><input type="date" id="po_placed" value="${esc(pls[0]||'')}"></div>
-      </div>
-      <div class="field row">
+        <div><label>Order placed date</label><input type="date" id="po_fpconf" value="${esc(fps[0]||'')}"></div>
         <div><label>Order ready date</label><input type="date" id="po_ready" value="${esc(rdys[0]||'')}">
           <div class="minor" style="font-size:11px;margin-top:3px">Saving applies this to every line on the PO. Per-line differences are set in Stock overview.</div></div>
-        <div></div>
       </div>
       <div class="field row">
         <div><label>Required ETD</label><input type="date" id="po_petd" value="${esc(etds[0]||'')}"></div>
@@ -1551,7 +1547,7 @@ function savePoEdit(){
 
   const po=val('po_po').trim();
   const plannedEtd=val('po_petd')||null, plannedEta=val('po_peta')||null;
-  const fpConfirmed=val('po_fpconf')||null, supplierPlaced=val('po_placed')||null;
+  const fpConfirmed=val('po_fpconf')||null;
   const orderReady=val('po_ready')||null;
   const periodLabel=new Date(month+'-01T00:00:00').toLocaleDateString('en-GB',{month:'long',year:'numeric'});
   const key=poEdit.key;
@@ -1565,12 +1561,12 @@ function savePoEdit(){
   poEdit.existing.forEach(l=>{ const o=order(l.id); if(!o) return;
     o.orderGroup=key; o.po=po; o.period=periodLabel; o.periodISO=month;
     o.plannedEtd=plannedEtd; o.plannedEta=plannedEta;
-    o.fpConfirmed=fpConfirmed; o.supplierPlaced=supplierPlaced; o.orderReady=orderReady;
+    o.fpConfirmed=fpConfirmed; o.orderReady=orderReady;
     o.orderQty=+l.qty; o.price=(l.price!=null&&l.price!=='')?+l.price:null; });
   // append any new lines to this same PO
   orderLines.forEach(l=>{ const p=productByCode(l.code);
     state.orders.push({ id:uid('o'), createdAt:Date.now(), orderGroup:key, period:periodLabel, periodISO:month, po, plannedEtd, plannedEta,
-      fpConfirmed, supplierPlaced, orderReady,
+      fpConfirmed, orderReady,
       code:l.code, description:l.description||(p?p.description:'')||'', profile:l.profile||'',
       price:(l.price!=null&&l.price!=='')?+l.price:(p&&p.price!=null&&p.price!==''?+p.price:null),
       rmbPrice:(l.rmbPrice!=null&&l.rmbPrice!=='')?+l.rmbPrice:(p&&p.rmbPrice!=null&&p.rmbPrice!==''?+p.rmbPrice:null),
@@ -1799,16 +1795,13 @@ function containersGridHTML(){
   return `<div class="cg-wrap ${cgFull?'cg-full':''}"><table class="cg"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
 }
 
-/* ---- column filter popover ---- */
-let cgPopKey=null;
-function cgOpenFilter(ev,k){
-  ev.stopPropagation(); cgPopKey=k;
-  const col=CG_COLS.find(x=>x.k===k); if(!col) return;
-  /* Offer the values actually present under the current search and status, so the list
-     never suggests something that would return nothing. */
-  const vals=[...new Set(visibleContainers().map(c=>String(cgVal(c,col)||'(blank)')))]
-    .sort((a,b)=>a.localeCompare(b,undefined,{numeric:true}));
-  const cur=contGrid.colFilters[k]||new Set();
+/* ---- column filter popover ----
+   Shared by the Containers grid and the Stock overview. The popover itself knows
+   nothing about either: whoever opens it hands over the value list, the current
+   selection, the object to write the chosen set into, and what to call afterwards. */
+let cgPopKey=null, cgPopStore=null, cgPopDone=null;
+function cgShowFilterPop(ev, vals, cur, store, done){
+  cgPopStore=store; cgPopDone=done;
   const p=cgPopEl();
   p.innerHTML=`<input class="f" placeholder="Search values…" oninput="cgFilterOpts(this.value)">
     <div class="opts" id="cgOpts">${vals.map(v=>`<label><input type="checkbox" value="${esc(v)}" ${cur.size===0||cur.has(v)?'checked':''} style="width:14px;height:14px;margin:0"> <span>${esc(v)}</span></label>`).join('')||'<div class="minor" style="padding:8px">No values</div>'}</div>
@@ -1819,6 +1812,15 @@ function cgOpenFilter(ev,k){
   p.style.left=Math.max(8,Math.min(r.left,window.innerWidth-280))+'px';
   p.style.top=(r.bottom+5)+'px';
   p.classList.add('open');
+}
+function cgOpenFilter(ev,k){
+  ev.stopPropagation(); cgPopKey=k;
+  const col=CG_COLS.find(x=>x.k===k); if(!col) return;
+  /* Offer the values actually present under the current search and status, so the list
+     never suggests something that would return nothing. */
+  const vals=[...new Set(visibleContainers().map(c=>String(cgVal(c,col)||'(blank)')))]
+    .sort((a,b)=>a.localeCompare(b,undefined,{numeric:true}));
+  cgShowFilterPop(ev, vals, contGrid.colFilters[k]||new Set(), contGrid.colFilters, cgRefresh);
 }
 function cgPopEl(){
   let p=document.getElementById('cgPop');
@@ -1832,9 +1834,10 @@ function cgSetAllOpts(on){ document.querySelectorAll('#cgOpts input').forEach(i=
 function cgApplyFilter(){
   const boxes=[...document.querySelectorAll('#cgOpts input')];
   const picked=boxes.filter(b=>b.checked).map(b=>b.value);
-  if(picked.length===boxes.length) delete contGrid.colFilters[cgPopKey];
-  else contGrid.colFilters[cgPopKey]=new Set(picked);
-  cgClosePops(); cgRefresh();
+  const store=cgPopStore||contGrid.colFilters;
+  if(picked.length===boxes.length) delete store[cgPopKey];
+  else store[cgPopKey]=new Set(picked);
+  cgClosePops(); (cgPopDone||cgRefresh)();
 }
 /* ---- column chooser ---- */
 function cgOpenCols(ev){
@@ -2273,12 +2276,12 @@ function exportBuyer(){
   if(sel) rows=rows.filter(r=>r.o.period===sel);
   rows.sort((a,b)=> String(a.o.factory||'~').localeCompare(String(b.o.factory||'~')) || (a.o.period||'').localeCompare(b.o.period||'') || String(a.o.code).localeCompare(String(b.o.code)));
   if(!rows.length){ toast('Nothing to export for '+(sel||'this month')); return; }
-  const H=['Factory','Month','Code','Profile','Description','Ordered','Shipped','O/S','FP order date','Placed with supplier','Load date','Required ETD','Actual ETD','Required ETA','Exp delivery','Completed','Late days','Status','Comment'];
+  const H=['Factory','Month','Code','Profile','Description','Ordered','Shipped','O/S','Order placed date','Load date','Required ETD','Actual ETD','Required ETA','Exp delivery','Completed','Late days','Status','Comment'];
   const aoa=[H.map(h=>xcell(h,5))];
   rows.forEach(({o,s,st})=>{ const late=buyerLate(o); const exp=buyerExpDeliv(o);
     aoa.push([ xcell(o.factory||''),xcell(o.period||''),xcell(o.code||''),xcell(o.profile||''),xcell(o.description||''),
       xcell(o.orderQty,2),xcell(s.packed,2),xcell(s.outstanding,2),
-      xdate(o.fpConfirmed), xdate(o.supplierPlaced), xdate(orderLoadDate(o)),
+      xdate(o.fpConfirmed), xdate(orderLoadDate(o)),
       o.plannedEtd?xdate(o.plannedEtd):xcell(''), orderActualEtd(o)?xdate(orderActualEtd(o)):xcell(''),
       o.plannedEta?xdate(o.plannedEta):xcell(''),
       orderCompletedDate(o)? xcell('') : (exp?xdate(exp):xcell('')),
@@ -3703,10 +3706,14 @@ function stockStatus(o, s, st){
   const ordered=o.orderQty||0;
   const pct = ordered>0 ? Math.floor((s.packed/ordered)*100) : null;
   const nearly = st==='Partial' && pct!=null && pct>=STOCK_NEARLY_PCT && s.outstanding>0;
-  if(nearly) return {label:'Nearly complete', cls:'st-nearly', pct, nearly:true};
-  /* The percentage is worth showing on any part-shipped line, not just the near ones. */
-  const showPct = (st==='Partial') && pct!=null;
-  return {label:st, cls:statusClass(st), pct:showPct?pct:null, nearly:false};
+  /* A part-shipped line shows its percentage and nothing else — the number says more
+     than the word "Partial" did, and in a table this dense the words were noise. The
+     band survives as `key`, which is what the status filter, the funnel and the export
+     group on, so only the badge text changed. Orange from 80% up, amber below. */
+  if(st==='Partial' && pct!=null)
+    return {key: nearly?'Nearly complete':'Partial', label: pct+'%',
+            cls: nearly?'st-nearly':'st-amber', pct, nearly};
+  return {key:st, label:st, cls:statusClass(st), pct:null, nearly:false};
 }
 function stockMonths(){
   const m=[...new Set(state.orders.map(o=>o.period).filter(Boolean))];
@@ -3714,14 +3721,60 @@ function stockMonths(){
     return String(pb&&pb.periodISO||'').localeCompare(String(pa&&pa.periodISO||'')); });
   return m;
 }
-function stockRows(){
+/* ---- Stock overview column funnels ----
+   They narrow whatever the search, month and status filters have already left, exactly
+   like the Containers grid. Only columns worth picking from a list get one; a date or a
+   quantity is better served by the controls above. Container and vessel differ per
+   shipment, so those match when ANY of the line's shipments matches — otherwise picking
+   one container would hide a split line because of its other legs. */
+const SO_FCOLS={
+  factory  :{t:'Factory',     v:r=>r.o.factory},
+  period   :{t:'Month',       v:r=>r.o.period},
+  code     :{t:'Code',        v:r=>r.o.code},
+  profile  :{t:'Profile',     v:r=>r.o.profile},
+  desc     :{t:'Description', v:r=>r.o.description},
+  container:{t:'Container',   v:r=>r.legs.map(l=>l.c.containerNo)},
+  vessel   :{t:'Vessel',      v:r=>r.legs.map(l=>l.c.vessel)},
+  status   :{t:'Status',      v:r=>r.ds.key},
+};
+let soFilters={};                                  // per-session, never persisted
+function soVals(r,k){
+  const c=SO_FCOLS[k]; if(!c) return ['(blank)'];
+  let v=c.v(r); if(!Array.isArray(v)) v=[v];
+  const out=v.map(x=>String(x==null||x===''?'(blank)':x));
+  return out.length? out : ['(blank)'];
+}
+function soActiveFilters(){ return Object.keys(soFilters).filter(k=>soFilters[k]&&soFilters[k].size).length; }
+function soClearFilters(){ soFilters={}; keepScroll(render); }
+function soOpenFilter(ev,k){
+  ev.stopPropagation(); cgPopKey=k;
+  if(!SO_FCOLS[k]) return;
+  /* Offer the values present before THIS column's own funnel, so unticking one does not
+     make the rest of the list disappear. */
+  const base=stockBaseRows().filter(r=>Object.keys(soFilters).every(o=>
+    o===k || !soFilters[o] || !soFilters[o].size || soVals(r,o).some(v=>soFilters[o].has(v))));
+  const vals=[...new Set(base.flatMap(r=>soVals(r,k)))]
+    .sort((a,b)=>a.localeCompare(b,undefined,{numeric:true}));
+  cgShowFilterPop(ev, vals, soFilters[k]||new Set(), soFilters, ()=>keepScroll(render));
+}
+/* The header cell. Pass a key to give the column a funnel; leave it off for the ones
+   that would only offer a list of dates. */
+function soTh(label,w,k,num){
+  const on=soFilters[k]&&soFilters[k].size;
+  return `<th class="${num?'num':''}" style="min-width:${w}px"><div class="cg-th">
+    <span class="lab" style="cursor:default">${esc(label)}</span>
+    ${k?`<span class="cg-funnel ${on?'on':''}" title="Filter ${esc(label)}" onclick="soOpenFilter(event,'${k}')">
+      <svg viewBox="0 0 24 24" fill="${on?'currentColor':'none'}" stroke="currentColor" stroke-width="2"><path d="M3 4h18l-7 8v6l-4 2v-8z"/></svg></span>`:''}
+  </div></th>`;
+}
+function stockBaseRows(){
   const f=filters.stock;
   const q=(f.q||'').toLowerCase();
   let rows=state.orders.map(stockRow);
   if(f.month!=='all') rows=rows.filter(r=>r.o.period===f.month);
-  /* Filter on the label actually shown, so picking "Nearly complete" does not come
-     back empty because the underlying status is still Partial. */
-  if(f.status!=='all') rows=rows.filter(r=>r.ds.label===f.status);
+  /* Filter on the band, not the badge: the badge now reads "80%", and the underlying
+     orderStatus() is still Partial for a nearly-complete line. */
+  if(f.status!=='all') rows=rows.filter(r=>r.ds.key===f.status);
   if(q) rows=rows.filter(r=>{
     const hay=[r.o.code,r.o.profile,r.o.description,r.o.po,r.o.factory,
       ...r.legs.map(l=>l.c.containerNo), ...r.legs.map(l=>l.c.vessel)].join(' ').toLowerCase();
@@ -3730,6 +3783,14 @@ function stockRows(){
   rows.sort((a,b)=> String(a.o.factory||'').localeCompare(String(b.o.factory||''))
     || String(a.o.code||'').localeCompare(String(b.o.code||''),undefined,{numeric:true})
     || String(a.o.profile||'').localeCompare(String(b.o.profile||'')));
+  return rows;
+}
+function stockRows(){
+  let rows=stockBaseRows();
+  Object.keys(soFilters).forEach(k=>{
+    const set=soFilters[k]; if(!set||!set.size||!SO_FCOLS[k]) return;
+    rows=rows.filter(r=>soVals(r,k).some(v=>set.has(v)));
+  });
   return rows;
 }
 function stockToggleFull(){
@@ -3762,16 +3823,16 @@ function viewStock(){
 
   const head=`<tr>
     <th style="min-width:30px"></th>
-    <th style="min-width:130px">Factory</th><th style="min-width:104px">Month</th>
-    <th style="min-width:86px">Code</th><th style="min-width:84px">Profile</th><th style="min-width:230px">Description</th>
-    <th class="num" style="min-width:76px">Ordered</th><th class="num" style="min-width:76px">Shipped</th><th class="num" style="min-width:66px">O/S</th>
-    <th style="min-width:98px">FP order date</th><th style="min-width:116px">Order ready</th>
-    <th style="min-width:98px">Required ETD</th><th style="min-width:98px">Required ETA</th>
-    <th style="min-width:92px">Load date</th><th style="min-width:92px">Actual ETD</th><th style="min-width:92px">Actual ETA</th>
-    <th style="min-width:104px">Exp. delivery</th><th style="min-width:96px">Delivered</th>
-    <th style="min-width:124px">Container</th><th style="min-width:150px">Vessel</th>
-    <th class="num" style="min-width:62px">Late</th><th style="min-width:104px">Status</th>
-    <th style="min-width:250px">Transit notes</th></tr>`;
+    ${soTh('Factory',130,'factory')}${soTh('Month',104,'period')}
+    ${soTh('Code',86,'code')}${soTh('Profile',84,'profile')}${soTh('Description',230,'desc')}
+    ${soTh('Ordered',76,null,1)}${soTh('Shipped',76,null,1)}${soTh('O/S',66,null,1)}
+    ${soTh('Order placed date',110)}${soTh('Order ready',116)}
+    ${soTh('Required ETD',98)}${soTh('Required ETA',98)}
+    ${soTh('Load date',92)}${soTh('Actual ETD',92)}${soTh('Actual ETA',92)}
+    ${soTh('Exp. delivery',104)}${soTh('Delivered',96)}
+    ${soTh('Container',124,'container')}${soTh('Vessel',150,'vessel')}
+    ${soTh('Late',62,null,1)}${soTh('Status',104,'status')}
+    ${soTh('Transit notes',250)}</tr>`;
 
   const body = rows.length? rows.map(r=>{
     const o=r.o, open=expandedStock.has(o.id), multi=r.legs.length>1;
@@ -3792,9 +3853,9 @@ function viewStock(){
       <td class="mono">${d(r.expDeliv)}</td><td class="mono">${d(r.completed)}</td>
       <td class="mono ${multi?'minor':''}">${esc(r.container)}</td><td>${esc(r.vessel)}</td>
       <td class="num mono ${r.late>0?'late':''}">${r.late>0?r.late:(r.late!=null?'0':'–')}</td>
-      <td><span class="badge-st ${r.ds.cls}" title="${esc(r.ds.nearly
-        ? nf(r.s.inProduction)+' of '+nf(r.o.orderQty||0)+' not yet shipped \u00b7 '+nf(r.s.outstanding)+' still to land'
-        : r.st)}">${esc(r.ds.label)}${r.ds.pct!=null?' '+r.ds.pct+'%':''}</span></td>
+      <td><span class="badge-st ${r.ds.cls}" title="${esc(r.ds.pct!=null
+        ? r.ds.key+' \u00b7 '+nf(r.s.inProduction)+' of '+nf(r.o.orderQty||0)+' not yet shipped \u00b7 '+nf(r.s.outstanding)+' still to land'
+        : r.st)}">${esc(r.ds.label)}</span></td>
       <td class="minor" style="font-size:11.5px">${esc(r.note||'—')}</td></tr>`+
       (open? r.legs.map(l=>{
         const ll=o.plannedEta? daysBetween(o.plannedEta, l.landed||l.expDeliv) : null;
@@ -3813,7 +3874,7 @@ function viewStock(){
   + `<tr class="group-row"><td colspan="6">Total — ${nf(rows.length)} line${rows.length===1?'':'s'}</td>
      <td class="num">${nf(tot.ord)}</td><td class="num">${nf(tot.shipped)}</td><td class="num">${nf(tot.os)}</td>
      <td colspan="14"></td></tr>`
-  : `<tr><td colspan="${STOCK_COLS+1}">${emptyBlock('Nothing to show','box','Adjust the month or status filter.')}</td></tr>`;
+  : `<tr><td colspan="${STOCK_COLS+1}">${emptyBlock('Nothing to show','box','Adjust the filters above, or clear the column funnels.')}</td></tr>`;
 
   return `
   <div class="print-head"><h1>Stock overview — ${esc(f.month==='all'?'All months':f.month)}</h1>
@@ -3827,6 +3888,7 @@ function viewStock(){
     <select class="filter" onchange="filters.stock.status=this.value;render()">
       ${['all','In Production','Partial','Nearly complete','On Water','Complete','Cancelled'].map(x=>
         `<option value="${x}" ${f.status===x?'selected':''}>${x==='all'?'All statuses':x}</option>`).join('')}</select>
+    ${soActiveFilters()?`<button class="btn sm" onclick="soClearFilters()" title="Clear every column funnel">Clear filters (${soActiveFilters()})</button>`:''}
     <button class="btn sm" onclick="stockExpandAll(true)">Expand all</button>
     <button class="btn sm" onclick="stockExpandAll(false)">Collapse all</button>
     <button class="btn sm" onclick="stockToggleFull()">${stockFull?'Exit full screen':'Full screen'}</button>
@@ -3846,15 +3908,17 @@ function exportStock(){
   const rows=stockRows();
   if(!rows.length){ toast('Nothing to export — check the filters'); return; }
   const H=s=>xcell(s,5);
-  const HEAD=['Factory','Month','PO','Code','Profile','Description','Status',
-    'FP order date','Order ready','Required ETD','Required ETA'];
+  /* The screen badge is now just a percentage, so the sheet carries both: the band to
+     group and filter on, and the number it was showing. */
+  const HEAD=['Factory','Month','PO','Code','Profile','Description','Status','% shipped',
+    'Order placed date','Order ready','Required ETD','Required ETA'];
 
   const s1=[[...HEAD,'Shipment','Of','Qty','Load date','Actual ETD','Actual ETA','Exp. delivery','Delivered',
     'Container','Vessel','Ready to load days','Harbour days','T/ship days','Transit days','Total days','Late days','Transit notes'].map(H)];
   rows.forEach(r=>{
     const o=r.o;
     const base=[xcell(o.factory||''),xcell(o.period||''),xcell(o.po||''),xcell(o.code||''),xcell(o.profile||''),
-      xcell(o.description||''),xcell(r.ds.label),
+      xcell(o.description||''),xcell(r.ds.key),r.ds.pct!=null?xcell(r.ds.pct,2):xcell(''),
       xdate(o.fpConfirmed),xdate(o.orderReady),xdate(o.plannedEtd),xdate(o.plannedEta)];
     if(!r.legs.length){
       s1.push([...base,xcell(''),xcell(''),xcell(0,2),xcell(''),xcell(''),xcell(''),xcell(''),xcell(''),
@@ -3880,7 +3944,7 @@ function exportStock(){
   rows.forEach(r=>{
     const o=r.o; tOrd+=o.orderQty||0; tShip+=r.s.packed; tOs+=r.s.outstanding;
     s2.push([xcell(o.factory||''),xcell(o.period||''),xcell(o.po||''),xcell(o.code||''),xcell(o.profile||''),
-      xcell(o.description||''),xcell(r.ds.label),
+      xcell(o.description||''),xcell(r.ds.key),r.ds.pct!=null?xcell(r.ds.pct,2):xcell(''),
       xdate(o.fpConfirmed),xdate(o.orderReady),xdate(o.plannedEtd),xdate(o.plannedEta),
       xcell(o.orderQty||0,2),xcell(r.s.packed,2),xcell(r.s.outstanding,2),
       xdate(r.loadDate),xdate(r.etd),xdate(r.eta),xdate(r.expDeliv),xdate(r.completed),
@@ -3889,14 +3953,14 @@ function exportStock(){
       r.late!=null?xcell(r.late,2):xcell(''), xcell(r.note||'')]);
   });
   const s2End=s2.length;
-  s2.push([xcell('Total',1),...Array(9).fill(0).map(()=>xcell('',1)),
+  s2.push([xcell('Total',1),...Array(10).fill(0).map(()=>xcell('',1)),
     xcell(tOrd,3),xcell(tShip,3),xcell(tOs,3),...Array(11).fill(0).map(()=>xcell('',1))]);
 
   downloadBytes(makeXlsxBook([
     {name:'By shipment', aoa:s1, filter:true, filterEnd:s1End, first:true,
-     colW:[15,13,12,11,10,32,13,13,13,13,13,10,6,9,12,12,12,13,12,15,18,14,12,12,12,11,11,34]},
+     colW:[15,13,12,11,10,32,13,10,13,13,13,13,10,6,9,12,12,12,13,12,15,18,14,12,12,12,11,11,34]},
     {name:'By order line', aoa:s2, filter:true, filterEnd:s2End,
-     colW:[15,13,12,11,10,32,13,13,13,13,13,10,10,9,12,12,12,13,12,11,15,18,11,34]},
+     colW:[15,13,12,11,10,32,13,10,13,13,13,13,10,10,9,12,12,12,13,12,11,15,18,11,34]},
   ]), 'stock-overview-'+todayISO()+'.xlsx');
   toast(`Excel downloaded — ${nf(rows.length)} line(s), ${nf(s1End-1)} shipment row(s)`);
 }
@@ -3931,10 +3995,10 @@ function viewBuyer(){
     <div class="tbl-wrap">
     ${any?`<table class="buyer-tbl"><thead><tr><th>Code</th><th>Profile</th><th>Description</th>
       <th class="num">Ordered</th><th class="num">Shipped</th><th class="num">O/S</th>
-      <th>FP order date</th><th>Placed w/ supplier</th><th>Load date</th>
+      <th>Order placed date</th><th>Load date</th>
       <th>Required ETD</th><th>Actual ETD</th><th>Required ETA</th><th>Exp. delivery</th><th>Completed</th><th class="num">Late</th><th>Status</th><th>Comment</th></tr></thead>
     <tbody>${keys.map(k=>{ const list=groups[k].sort((a,b)=>(a.o.period||'').localeCompare(b.o.period||'')||String(a.o.code).localeCompare(String(b.o.code)));
-      return `<tr class="group-row"><td colspan="17">${esc(k)} — ${list.length} line${list.length===1?'':'s'}</td></tr>`+
+      return `<tr class="group-row"><td colspan="16">${esc(k)} — ${list.length} line${list.length===1?'':'s'}</td></tr>`+
       list.map(({o,s,st})=>{ const cls=statusClass(st).replace('st-','b-'); const late=buyerLate(o); const exp=buyerExpDeliv(o);
         const aEtd=orderActualEtd(o); const done=orderCompletedDate(o); const allocs=orderAllocs(o);
         return `<tr class="brow ${cls} clickable" onclick="openOrderDetail('${o.id}')">
@@ -3943,7 +4007,6 @@ function viewBuyer(){
         <td class="num mono">${nf(o.orderQty)}</td><td class="num mono">${nf(s.packed)}</td>
         <td class="num mono"><b>${nf(s.outstanding)}</b></td>
         <td class="mono">${fmtDateShort(o.fpConfirmed)}</td>
-        <td class="mono">${fmtDateShort(o.supplierPlaced)}</td>
         <td class="mono">${fmtDateShort(orderLoadDate(o))}</td>
         <td class="mono">${o.plannedEtd?fmtDateShort(new Date(o.plannedEtd+'T00:00:00')):'—'}</td>
         <td class="mono">${aEtd?fmtDateShort(new Date(aEtd+'T00:00:00')):'—'}</td>
@@ -4709,13 +4772,9 @@ function openOrderModal(editId){
           <div><label>PO number</label><input id="o_po" value="${esc(o.po||'')}" placeholder="e.g. PO-1042"></div>
         </div>
         <div class="field row">
-          <div><label>FP order date</label><input type="date" id="o_fpconf" value="${o.fpConfirmed||''}"></div>
-          <div><label>Placed with supplier</label><input type="date" id="o_placed" value="${o.supplierPlaced||''}"></div>
-        </div>
-        <div class="field row">
+          <div><label>Order placed date</label><input type="date" id="o_fpconf" value="${o.fpConfirmed||''}"></div>
           <div><label>Order ready date</label><input type="date" id="o_ready" value="${o.orderReady||''}">
             <div class="minor" style="font-size:11px;margin-top:3px">When this line's stock was ready at the factory.</div></div>
-          <div></div>
         </div>
         <div class="field row">
           <div><label>Required ETD</label><input type="date" id="o_petd" value="${o.plannedEtd||''}"></div>
@@ -4744,13 +4803,9 @@ function openOrderModal(editId){
         <div><label>PO number</label><input id="o_po" placeholder="e.g. PO-1042"></div>
       </div>
       <div class="field row">
-        <div><label>FP order date</label><input type="date" id="o_fpconf"></div>
-        <div><label>Placed with supplier</label><input type="date" id="o_placed"></div>
-      </div>
-      <div class="field row">
+        <div><label>Order placed date</label><input type="date" id="o_fpconf"></div>
         <div><label>Order ready date</label><input type="date" id="o_ready">
           <div class="minor" style="font-size:11px;margin-top:3px">Applied to every line on this order. Individual lines can be changed later in Stock overview.</div></div>
-        <div></div>
       </div>
       <div class="field row">
         <div><label>Required ETD</label><input type="date" id="o_petd"></div>
@@ -4928,13 +4983,13 @@ function saveOrderBatch(){
   if(!orderLines.length){ toast('Add at least one line'); return; }
   const po=val('o_po').trim();
   const plannedEtd=val('o_petd')||null, plannedEta=val('o_peta')||null;
-  const fpConfirmed=val('o_fpconf')||null, supplierPlaced=val('o_placed')||null;
+  const fpConfirmed=val('o_fpconf')||null;
   const orderReady=val('o_ready')||null;
   const periodLabel=new Date(month+'-01T00:00:00').toLocaleDateString('en-GB',{month:'long',year:'numeric'});
   const grp=uid('grp');
   orderLines.forEach(l=>{ const p=productByCode(l.code);
     state.orders.push({ id:uid('o'), createdAt:Date.now(), orderGroup:grp, period:periodLabel, periodISO:month, po, plannedEtd, plannedEta,
-      fpConfirmed, supplierPlaced, orderReady,
+      fpConfirmed, orderReady,
       code:l.code, description:l.description||(p?p.description:'')||'', profile:l.profile||'',
       price:(l.price!=null&&l.price!=='')?+l.price:(p&&p.price!=null&&p.price!==''?+p.price:null),
       rmbPrice:(l.rmbPrice!=null&&l.rmbPrice!=='')?+l.rmbPrice:(p&&p.rmbPrice!=null&&p.rmbPrice!==''?+p.rmbPrice:null),
@@ -4955,7 +5010,7 @@ function saveOrder(id){
   const rmRaw=val('o_rmb').trim(); const rmbPrice = rmRaw===''? (p&&p.rmbPrice!=null&&p.rmbPrice!==''?+p.rmbPrice:null) : (isFinite(+rmRaw)?+rmRaw:null);
   const data={ period:periodLabel, periodISO:month, po:val('o_po').trim(), code, description:desc, price, rmbPrice,
     plannedEtd:val('o_petd')||null, plannedEta:val('o_peta')||null,
-    fpConfirmed:val('o_fpconf')||null, supplierPlaced:val('o_placed')||null,
+    fpConfirmed:val('o_fpconf')||null,
     orderReady:val('o_ready')||null,
     profile, factory:(p?p.factory:'')||order(id).factory||'', orderQty:qty, comment:val('o_comment').trim() };
   Object.assign(order(id), data); save(); closeModal(); render(); fillFactoryList(); toast('Order updated');
@@ -4983,8 +5038,7 @@ function openOrderDetail(id){
         <div class="d-cell"><div class="dl">Order month</div><div class="dv">${esc(o.period)}</div></div>
         <div class="d-cell"><div class="dl">PO number</div><div class="dv mono">${esc(o.po||'—')}</div></div>
         <div class="d-cell"><div class="dl">Factory</div><div class="dv">${esc(o.factory||'—')}</div></div>
-        <div class="d-cell"><div class="dl">FP order date</div><div class="dv mono">${fmtDateShort(o.fpConfirmed)}</div></div>
-        <div class="d-cell"><div class="dl">Placed with supplier</div><div class="dv mono">${fmtDateShort(o.supplierPlaced)}</div></div>
+        <div class="d-cell"><div class="dl">Order placed date</div><div class="dv mono">${fmtDateShort(o.fpConfirmed)}</div></div>
         <div class="d-cell"><div class="dl">Order ready</div><div class="dv mono">${fmtDateShort(o.orderReady)}</div></div>
         <div class="d-cell"><div class="dl">Required ETD</div><div class="dv mono">${o.plannedEtd?fmtDateShort(new Date(o.plannedEtd+'T00:00:00')):'—'}</div></div>
         <div class="d-cell"><div class="dl">Planned ETA</div><div class="dv mono">${o.plannedEta?fmtDateShort(new Date(o.plannedEta+'T00:00:00')):'—'}</div></div>
@@ -5114,7 +5168,6 @@ function openPackModal(editId, focusOrderId){
             <datalist id="lineList">${LINES.map(l=>`<option value="${esc(l)}">`).join('')}</datalist></div>
           <div><label>Load date</label><input type="date" id="c_load" value="${c&&c.loadDate?c.loadDate:''}"></div>
         </div>
-        <div class="field row">
         <div class="field row">
           <div><label>Port of load (POL)</label><select id="c_pol">
             <option value="">— Select —</option>
