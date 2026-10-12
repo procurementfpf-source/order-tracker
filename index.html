@@ -695,6 +695,9 @@ tr.cg-row.sel td,tr.cg-row.sel:hover td{background:var(--accent-soft)}
 tr.cg-row.prov td,tr.cg-row.prov:hover td{background:var(--blue-bg)}
 tr.cg-row.prov.sel td{background:var(--accent-soft)}
 td.cg-cno{font-weight:600;color:var(--txt)}
+/* Signals that the number itself does something. */
+td.cg-dbl{cursor:pointer}
+tr.cg-row:hover td.cg-dbl{text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px}
 td.cg-vessel{color:var(--txt);font-weight:500}
 .cg-chip{display:inline-block;font-size:9.5px;font-weight:700;letter-spacing:.4px;padding:1px 5px;
   border-radius:4px;background:var(--amber-bg);color:var(--amber);margin-left:5px;vertical-align:1px}
@@ -1772,7 +1775,12 @@ function containersGridHTML(){
     const prov=c.finalVessel===false && c.status!=='Delivered';
     const tds=cols.map(col=>{
       const raw=cgVal(c,col);
-      return `<td class="${col.cls||''} ${col.print?'':'cg-noprint'}" title="${esc(String(raw==null?'':raw))}">${
+      /* The container number doubles as the edit handle: double-clicking it opens the
+         same modal as the Edit button, which is where the eye already is. */
+      const edit = col.k==='containerNo';
+      return `<td class="${col.cls||''} ${edit?'cg-dbl ':''}${col.print?'':'cg-noprint'}"${
+        edit?` ondblclick="cgEditContainer('${c.id}')"`:''} title="${
+        esc(String(raw==null?'':raw))}${edit?' — double-click to edit':''}">${
         col.cell? col.cell(c) : (esc(String(raw||''))||'—')}</td>`;
     }).join('');
     return `<tr class="cg-row ${selectedContainers.has(c.id)?'sel':''} ${prov?'prov':''} ${open?'open':''}" data-cc="${c.id}">
@@ -1950,6 +1958,12 @@ function containersListHTML(){
         : emptyBlock(f.status==='On Water'&&!f.q?'Nothing on the water':'No containers match','pack',
             (f.status==='all'?'Try clearing the search.':'You have '+state.containers.length+' container'+(state.containers.length===1?'':'s')+' in total — switch to “All” above to see everything.'))
     }</div></div>`;
+}
+/* A double click selects the word under the cursor, which would leave the number
+   highlighted behind the modal. Clear it first; dragging to select and copy still works. */
+function cgEditContainer(id){
+  try{ const sel=window.getSelection&&window.getSelection(); if(sel) sel.removeAllRanges(); }catch(e){}
+  openPackModal(id);
 }
 function toggleContainerSelect(id){
   if(selectedContainers.has(id)) selectedContainers.delete(id); else selectedContainers.add(id);
@@ -3826,9 +3840,9 @@ function viewStock(){
     ${soTh('Factory',130,'factory')}${soTh('Month',104,'period')}
     ${soTh('Code',86,'code')}${soTh('Profile',84,'profile')}${soTh('Description',230,'desc')}
     ${soTh('Ordered',76,null,1)}${soTh('Shipped',76,null,1)}${soTh('O/S',66,null,1)}
-    ${soTh('Order placed date',110)}${soTh('Order ready',116)}
+    ${soTh('Order placed',100)}${soTh('Order ready',116)}
     ${soTh('Required ETD',98)}${soTh('Required ETA',98)}
-    ${soTh('Load date',92)}${soTh('Actual ETD',92)}${soTh('Actual ETA',92)}
+    ${soTh('Load date',92)}${soTh('Actual ETD',92)}${soTh('ETA',92)}
     ${soTh('Exp. delivery',104)}${soTh('Delivered',96)}
     ${soTh('Container',124,'container')}${soTh('Vessel',150,'vessel')}
     ${soTh('Late',62,null,1)}${soTh('Status',104,'status')}
@@ -3911,9 +3925,9 @@ function exportStock(){
   /* The screen badge is now just a percentage, so the sheet carries both: the band to
      group and filter on, and the number it was showing. */
   const HEAD=['Factory','Month','PO','Code','Profile','Description','Status','% shipped',
-    'Order placed date','Order ready','Required ETD','Required ETA'];
+    'Order placed','Order ready','Required ETD','Required ETA'];
 
-  const s1=[[...HEAD,'Shipment','Of','Qty','Load date','Actual ETD','Actual ETA','Exp. delivery','Delivered',
+  const s1=[[...HEAD,'Shipment','Of','Qty','Load date','Actual ETD','ETA','Exp. delivery','Delivered',
     'Container','Vessel','Ready to load days','Harbour days','T/ship days','Transit days','Total days','Late days','Transit notes'].map(H)];
   rows.forEach(r=>{
     const o=r.o;
@@ -3938,7 +3952,7 @@ function exportStock(){
   });
   const s1End=s1.length;
 
-  const s2=[[...HEAD,'Ordered','Shipped','O/S','Load date','Actual ETD','Actual ETA','Exp. delivery','Delivered',
+  const s2=[[...HEAD,'Ordered','Shipped','O/S','Load date','Actual ETD','ETA','Exp. delivery','Delivered',
     'Shipments','Container','Vessel','Late days','Transit notes'].map(H)];
   let tOrd=0,tShip=0,tOs=0;
   rows.forEach(r=>{
