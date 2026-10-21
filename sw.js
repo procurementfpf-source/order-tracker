@@ -10,10 +10,11 @@
 
    Bump CACHE when you publish a new version of index.html. */
 
-const CACHE = 'order-tracker-v62-1';
+const CACHE = 'order-tracker-v65-1';
 const SHELL = [
   './',
   './index.html',
+  './tracker.html',     // same app, shorter menu — needs caching too or it dies offline
   './manifest.json',
   './icon-192.png',
   './icon-512.png',
