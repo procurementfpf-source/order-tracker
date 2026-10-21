@@ -664,6 +664,25 @@ body.cg-locked .cg-exit{display:inline-flex}
 .cg-wrap.so-wrap,.cg-wrap.po-wrap{max-height:calc(100vh - 150px)}
 .cg-wrap.so-wrap.cg-full,.cg-wrap.po-wrap.cg-full{max-height:none}
 @media (max-width:900px){ .cg-wrap.so-wrap,.cg-wrap.po-wrap{max-height:calc(100vh - 132px)} }
+/* Payment schedule: the total is the handle for the breakdown, so it has to look like one. */
+.pay-note{font-size:12px;color:var(--txt-2);background:var(--bg-2);border:1px solid var(--line);
+  border-radius:var(--radius-s);padding:9px 11px;margin-top:4px}
+td.pay-total{cursor:pointer}
+tr.pay-row:hover td{background:var(--panel-2)}
+td.pay-total:hover{color:var(--accent)}
+tr.pay-row.open td{background:var(--panel-2)}
+tr.pay-detail td{padding:0;background:var(--bg-2)}
+.pay-detail-inner{padding:10px 14px 14px}
+table.pay-sub{width:100%;border-collapse:collapse}
+table.pay-sub th{font-size:9.5px;text-transform:uppercase;letter-spacing:.5px;color:var(--txt-3);
+  text-align:left;padding:4px 8px;border-bottom:1px solid var(--line)}
+table.pay-sub td{padding:4px 8px;border-bottom:1px solid var(--line-soft);font-size:12px}
+table.pay-sub td.num,table.pay-sub th.num{text-align:right}
+.pay-kind{font-size:9.5px;font-weight:700;letter-spacing:.4px;padding:1px 5px;border-radius:4px}
+.pay-kind.actual{background:var(--green-bg);color:var(--green)}
+.pay-kind.est{background:var(--blue-bg);color:var(--blue)}
+.caret.open svg{transform:rotate(90deg)}
+@media print{ .pay-detail{display:none} }
 /* PO outstanding is the one deliberately dense table: shorter rows and a smaller face
    so a long backlog fits on one screen. These override table.cg, so they must come
    after it — at equal specificity the later rule wins and the earlier one is dead. */
@@ -862,6 +881,54 @@ function storageMB(){
 }
 function uid(p){ return p+'_'+Date.now().toString(36)+Math.random().toString(36).slice(2,6); }
 
+/* ============ PAYMENT SCHEDULE ============
+   Deliveries are settled weekly. A delivery week runs Thursday to the following
+   Wednesday, and that week is paid on the Thursday a fortnight after it opened:
+   stock delivered Thu 15 Oct – Wed 21 Oct is paid on Thu 29 Oct.
+
+   Which date a container sits on depends on what is known about it:
+     Delivered  -> deliveredAt, the date confirmed on receipt. Fixed, and what makes
+                   the schedule trustworthy.
+     On water   -> expected delivery (ETA + ETA_BUFFER_DAYS). Moves when the ETA moves,
+                   so an upcoming payment is an estimate until the stock lands.
+     No date    -> not placed at all. Guessing would quietly misstate a payment, so it
+                   is listed separately for you to fix. */
+const PAY_DOW = 4;            // Thursday, as Date.getDay() counts it (0 = Sunday)
+const PAY_LAG_DAYS = 14;      // the week opening Thursday X is paid on Thursday X + 14
+
+/* The Thursday that opens the delivery week containing this date. */
+function payWeekStart(iso){
+  if(!iso) return null;
+  const d=new Date(iso+'T00:00:00'); if(isNaN(d)) return null;
+  d.setDate(d.getDate() - ((d.getDay()-PAY_DOW+7)%7));
+  return isoOf(d);
+}
+function payWeekEnd(iso){ const s=payWeekStart(iso); return s? isoPlusDays(s,6) : null; }
+function payDateFor(iso){ const s=payWeekStart(iso); return s? isoPlusDays(s,PAY_LAG_DAYS) : null; }
+/* And back the other way, for showing which week a payment covers. */
+function payWeekOfPayment(payISO){ return payISO? isoPlusDays(payISO,-PAY_LAG_DAYS) : null; }
+
+/* The date a container is scheduled on, and how much to trust it. */
+function payBasis(c){
+  if(c.status==='Delivered'){
+    return c.deliveredAt
+      ? {iso:c.deliveredAt, kind:'actual'}
+      : {iso:null, kind:null, why:'marked delivered, but no delivery date was captured'};
+  }
+  const e=expDelivOf(c);
+  return e ? {iso:isoOf(e), kind:'expected'}
+           : {iso:null, kind:null, why:'no ETA, so there is nothing to schedule from'};
+}
+function fmtDayDate(iso){
+  if(!iso) return '—';
+  const d=new Date(iso+'T00:00:00'); if(isNaN(d)) return '—';
+  return _dtf('daydate',{weekday:'short',day:'numeric',month:'short',year:'numeric'}).format(d);
+}
+function payWeekLabel(payISO){
+  const a=payWeekOfPayment(payISO); if(!a) return '';
+  return fmtDateShort(a)+' – '+fmtDateShort(isoPlusDays(a,6));
+}
+
 /* ============ DERIVED CALCS ============ */
 /* ---------- LOOKUP INDEX ----------
    order()/container() used to scan the whole array on every call, and orderStats() looped
@@ -990,7 +1057,10 @@ function fmtDateShort(d){ return _fmtCached('short',{day:'numeric',month:'short'
 function monthKey(d){ const x=(typeof d==='string')?new Date(d+'T00:00:00'):d; return x.getFullYear()+'-'+String(x.getMonth()+1).padStart(2,'0'); }
 function monthLabel(d){ const x=(typeof d==='string')?new Date(d+'T00:00:00'):d; return _dtf('mon',{month:'short',year:'2-digit'}).format(x); }
 function startOfWeek(d){ const x=new Date(d); const day=(x.getDay()+6)%7; x.setDate(x.getDate()-day); x.setHours(0,0,0,0); return x; }
-function todayISO(){ return new Date().toISOString().slice(0,10); }
+/* Local parts, not toISOString(). At UTC+2 the UTC date is still yesterday until 2am,
+   which would date a delivery — and therefore its payment week — a day early. */
+function isoOf(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+function todayISO(){ return isoOf(new Date()); }
 function toast(msg){ const t=document.getElementById('toast'); t.textContent=msg; t.classList.add('show'); clearTimeout(t._t); t._t=setTimeout(()=>t.classList.remove('show'),2200); }
 
 /* parse an order's "period" (e.g. "2026-06" or "June") into a comparable month for bucketing */
@@ -1019,6 +1089,10 @@ const REPORT_TABS=[
   {id:'stock', label:'Stock overview', icon:'M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4'},
   {id:'reports', label:'Reports', icon:'M3 3v18h18M7 15l4-5 3 3 5-7'},
 ];
+/* Some screens are reachable two ways: from the Reports index, and — in a build whose
+   menu lists them directly — as an entry of their own. Anything that only makes sense
+   on one of those routes asks here rather than carrying a build flag around. */
+function navHas(id){ return TABS.some(t=>t.id===id) || REPORT_TABS.some(t=>t.id===id); }
 function renderNav(){
   const navLink=t=>{
     return '<a href="#'+t.id+'" class="'+(activeTab===t.id?'active':'')+'" onclick="go(\''+t.id+'\');return false;">'+
@@ -1044,6 +1118,7 @@ const TITLES={
   statement:['Statement','Compile a customer statement from invoices'],
   shipping:['Shipping charges','ROE, forwarding, clearing and transport charges'],
   reports:['Reports','Analysis built from your delivered and in-transit shipments'],
+  poOutstanding:['PO outstanding','Every order line still owing, and the month it lands'],
   sync:['Sync','Keep this device in step with your other devices'],
 };
 function go(tab){
@@ -1052,7 +1127,7 @@ function go(tab){
   const [t,s]=TITLES[tab];
   document.getElementById('pageTitle').innerHTML='<h2>'+t+'</h2><p>'+s+'</p>';
   const pa=document.getElementById('primaryAction'), lbl=document.getElementById('primaryActionLbl');
-  pa.style.display = (tab==='statement'||tab==='shipping'||tab==='codeLookup'||tab==='reports'||tab==='sync'||tab==='stock') ? 'none' : '';
+  pa.style.display = (tab==='statement'||tab==='shipping'||tab==='codeLookup'||tab==='reports'||tab==='sync'||tab==='stock'||tab==='poOutstanding') ? 'none' : '';
   if(tab==='invoice'){ lbl.textContent='New invoice'; pa.onclick=()=>openInvoicePicker(); }
   else if(tab==='products'){ lbl.textContent='Add product'; pa.onclick=()=>productAdd(); }
   else if(tab==='containers'||tab==='warehouse'||tab==='dashboard'){ lbl.textContent='Pack container'; pa.onclick=()=>openPackModal(); }
@@ -1071,7 +1146,8 @@ function render(){
   const v=document.getElementById('view');
   v.innerHTML = ({
     dashboard:viewDashboard, orders:viewOrders, containers:viewContainers,
-    outstanding:viewOutstanding, arrivals:viewArrivals, warehouse:viewWarehouse, buyer:viewBuyer, invoice:viewInvoice, products:viewProducts, statement:viewStatement, shipping:viewShipping, codeLookup:viewCodeLookup, reports:viewReports, stock:viewStock, sync:viewSync
+    outstanding:viewOutstanding, arrivals:viewArrivals, warehouse:viewWarehouse, buyer:viewBuyer, invoice:viewInvoice, products:viewProducts, statement:viewStatement, shipping:viewShipping, codeLookup:viewCodeLookup, reports:viewReports, stock:viewStock, sync:viewSync,
+    poOutstanding:reportPoOutstanding
   }[activeTab])();
   renderNav();
   if(activeTab==='invoice') renderInvoiceItems();
@@ -2577,6 +2653,9 @@ const REPORTS=[
   {id:'poOutstanding', name:'PO outstanding', tag:'Orders',
    desc:'One tight line per order still owing: what was ordered, what shipped, and the month it lands.',
    icon:'M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2M9 5a2 2 0 0 0 2 2h2a2 2 0 0 0 2-2M9 5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2M9 14h6M9 17h3'},
+  {id:'paymentSchedule', name:'Payment schedule', tag:'Finance',
+   desc:'What is owed on each payment Thursday, from confirmed deliveries and the ETAs of what is still at sea.',
+   icon:'M3 10h18M3 6h18v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2zM8 2v4M16 2v4M8 14h3M8 17h6'},
   {id:'containerValues', name:'Container values', tag:'Finance',
    desc:'What each container is worth — delivered, by upcoming month, and any set of on-water containers you pick.',
    icon:'M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4M9 12.5 15 9'},
@@ -2697,7 +2776,7 @@ function reportPoOutstanding(){
   return `
   <div class="print-head"><h1>PO outstanding</h1><p>Much Better Furniture · ${fmtDate(todayISO())}</p></div>
   <div class="toolbar no-print po-tools">
-    <button class="btn sm" onclick="closeReport()"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="m15 18-6-6 6-6"/></svg> All reports</button>
+    ${navHas('reports')?`<button class="btn sm" onclick="closeReport()"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="m15 18-6-6 6-6"/></svg> All reports</button>`:''}
     <input id="poQ" class="so-search" placeholder="Search code, description, PO…" value="${esc(poOut.q||'')}" oninput="poSearch(this.value)">
     <select class="filter" onchange="poOut.month=this.value;render()">
       <option value="all" ${poOut.month==='all'?'selected':''}>All months</option>
@@ -2758,6 +2837,231 @@ function exportPoOutstanding(){
     xcell(tO,3),xcell(tS,3),xcell(tU,3),xcell('',1),xcell('',1)]);
   downloadBytes(makeXlsxBook([{name:'PO outstanding', aoa, filter:true, filterEnd:end, first:true,
     colW:[11,11,34,13,13,15,10,10,12,26,10]}]), 'po-outstanding-'+todayISO()+'.xlsx');
+  toast('Excel downloaded');
+}
+
+
+/* ============ PAYMENT SCHEDULE REPORT ============
+   One row per payment Thursday. The total opens a breakdown of the containers behind
+   it, because "R 1.4m on 29 Oct" is only useful if you can see what makes it up.
+
+   A payment firms up in two stages. While its delivery week is still running the
+   figure moves with the ETAs. Once the week has closed and every container in it has
+   a confirmed delivery date, the amount is settled — and a statement can be drawn
+   then, rather than waiting for the payment date itself. */
+let payUI={mode:'upcoming', open:new Set()};
+
+function payData(){
+  const today=todayISO();
+  const map=new Map();
+  const unscheduled=[];
+  (state.containers||[]).forEach(c=>{
+    const b=payBasis(c), v=containerValue(c);
+    if(!b.iso){ unscheduled.push({c, v, why:b.why}); return; }
+    const payISO=payDateFor(b.iso);
+    let r=map.get(payISO);
+    if(!r){ r={payISO, weekStart:payWeekOfPayment(payISO), weekEnd:isoPlusDays(payWeekOfPayment(payISO),6),
+               items:[], value:0, units:0, unpriced:0, missing:[], nActual:0, nExpected:0}; map.set(payISO,r); }
+    r.items.push({c, v, basis:b.iso, kind:b.kind});
+    r.value+=v.value; r.units+=v.units; r.unpriced+=v.unpriced;
+    v.missing.forEach(m=>{ if(!r.missing.includes(m)) r.missing.push(m); });
+    if(b.kind==='actual') r.nActual++; else r.nExpected++;
+  });
+  const rows=[...map.values()].sort((a,b)=>a.payISO.localeCompare(b.payISO));
+  rows.forEach(r=>{
+    r.items.sort((x,y)=> String(x.basis).localeCompare(String(y.basis))
+      || String(x.c.containerNo||'').localeCompare(String(y.c.containerNo||'')));
+    r.closed = r.weekEnd < today;              // the delivery week has finished
+    r.past   = r.payISO < today;               // the money has been paid
+    r.ready  = r.closed && r.nExpected===0 && r.items.length>0;
+    /* Closed week, still showing estimates: those containers landed (or should have)
+       and nobody marked them received. That is the gap worth chasing. */
+    r.awaiting = r.closed ? r.items.filter(i=>i.kind!=='actual') : [];
+    r.status = r.nExpected===0 ? 'Confirmed' : (r.nActual? 'Part confirmed' : 'Estimated');
+  });
+  const upcoming=rows.filter(r=>!r.past), history=rows.filter(r=>r.past).reverse();
+  const awaiting=rows.reduce((a,r)=>a+r.awaiting.length,0);
+  return {rows, upcoming, history, unscheduled, awaiting,
+          next: upcoming[0]||null,
+          upcomingTotal: upcoming.reduce((a,r)=>a+r.value,0),
+          readyNow: upcoming.filter(r=>r.ready)};
+}
+function payToggle(k){ payUI.open.has(k)?payUI.open.delete(k):payUI.open.add(k); keepScroll(render); }
+/* The containers that need a delivery date usually sit on a payment date that has
+   already come round, which the Upcoming view does not show — so switch to All and
+   open exactly the rows that need attention. */
+function payShowAwaiting(){
+  const D=payData();
+  payUI.mode='all';
+  payUI.open=new Set(D.rows.filter(r=>r.awaiting.length).map(r=>r.payISO));
+  render();
+}
+function paySetMode(m){ payUI.mode=m; payUI.open.clear(); render(); }
+
+function payRowsHTML(rows, D){
+  if(!rows.length) return `<tr><td colspan="7">${emptyBlock('Nothing here','box',
+    payUI.mode==='history'?'No payment dates have passed yet.':'No containers are scheduled for payment.')}</td></tr>`;
+  return rows.map(r=>{
+    const open=payUI.open.has(r.payISO);
+    /* Colour follows the data, not readiness — two rows both reading "Confirmed" in
+       different colours was just confusing. Whether a statement can be drawn is already
+       said by the button at the end of the row. */
+    const cls = r.nExpected? (r.nActual?'st-amber':'st-blue') : 'st-green';
+    return `<tr class="pay-row ${open?'open':''}">
+      <td><button class="caret ${open?'open':''}" title="Show the containers" onclick="payToggle('${r.payISO}')">
+        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="m9 18 6-6-6-6"/></svg></button></td>
+      <td><b>${esc(fmtDayDate(r.payISO))}</b></td>
+      <td class="minor">${esc(payWeekLabel(r.payISO))}</td>
+      <td class="num mono">${nf(r.items.length)}</td>
+      <td class="num mono">${nf(r.units)}</td>
+      <td class="num mono pay-total" title="Click for the breakdown" onclick="payToggle('${r.payISO}')">
+        <b>${money(r.value)}</b>${r.unpriced?`<span class="minor" title="${esc(r.missing.join(', '))}"> +${nf(r.unpriced)} unpriced</span>`:''}</td>
+      <td><span class="badge-st ${cls}" title="${esc(r.nExpected? r.nExpected+' container(s) still on the water — this figure moves with their ETA' : 'Every container has a confirmed delivery date')}">${r.status}</span>
+        ${r.awaiting.length?`<span class="badge-st st-red" style="margin-left:5px" title="The delivery week has closed but these are still marked on the water">${r.awaiting.length} to confirm</span>`:''}</td>
+      <td class="no-print" style="text-align:right">
+        ${r.ready?`<button class="btn sm primary" onclick="payStatement('${r.payISO}')">Statement</button>`
+                 :`<button class="btn sm" disabled title="Available once the delivery week has closed and every container has a confirmed delivery date">Statement</button>`}</td>
+    </tr>`+
+    (open?`<tr class="pay-detail"><td colspan="8"><div class="pay-detail-inner">
+      <table class="pay-sub"><thead><tr><th>Container</th><th>Vessel</th><th>POL</th>
+        <th>Delivered</th><th>Basis</th><th class="num">Units</th><th class="num">Value</th></tr></thead><tbody>
+        ${r.items.map(i=>`<tr>
+          <td class="mono" style="font-weight:600">${esc(i.c.containerNo||'—')}</td>
+          <td>${esc(i.c.vessel||'—')}</td><td class="minor">${esc(i.c.pol||'—')}</td>
+          <td class="mono">${esc(fmtDateShort(i.basis))}</td>
+          <td>${i.kind==='actual'
+            ? '<span class="pay-kind actual">Confirmed</span>'
+            : `<span class="pay-kind est">Expected</span> <input type="date" class="so-date" value="" title="Enter the real delivery date to confirm it" onchange="setDeliveredAt('${i.c.id}',this.value)">`}</td>
+          <td class="num mono">${nf(i.v.units)}</td>
+          <td class="num mono">${money(i.v.value)}</td></tr>`).join('')}
+        <tr class="group-row"><td colspan="5">Total</td>
+          <td class="num">${nf(r.units)}</td><td class="num">${money(r.value)}</td></tr>
+      </tbody></table></div></td></tr>`:'');
+  }).join('');
+}
+
+function reportPaymentSchedule(){
+  const D=payData();
+  const rows = payUI.mode==='history'? D.history : payUI.mode==='all'? D.rows : D.upcoming;
+  const seg=(m,lbl)=>`<button class="${payUI.mode===m?'active':''}" onclick="paySetMode('${m}')">${lbl}</button>`;
+  return `
+  <div class="print-head"><h1>Payment schedule</h1><p>Much Better Furniture · ${fmtDate(todayISO())}</p></div>
+  <div class="toolbar no-print">
+    <button class="btn sm" onclick="closeReport()"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="m15 18-6-6 6-6"/></svg> All reports</button>
+    <div class="seg">${seg('upcoming','Upcoming')}${seg('history','History')}${seg('all','All')}</div>
+    <button class="btn sm" onclick="payUI.open=new Set(${JSON.stringify(rows.map(r=>r.payISO))});render()">Expand all</button>
+    <button class="btn sm" onclick="payUI.open.clear();render()">Collapse all</button>
+    <div style="flex:1"></div>
+    <button class="btn sm" onclick="exportPaymentSchedule()">Export to Excel</button>
+    <button class="btn sm" onclick="window.print()">Print</button>
+  </div>
+  <div class="minor" style="font-size:12px;margin-bottom:12px">
+    Stock delivered Thursday to Wednesday is paid on the Thursday a fortnight after that week opened.
+    Delivered containers use the date you confirmed on receipt; those still on the water use expected
+    delivery (ETA plus ${ETA_BUFFER_DAYS} days) and move as the ETA moves.</div>
+  <div class="kpis">
+    <div class="kpi k-blue"><div class="lbl">Next payment</div>
+      <div class="val" style="font-size:19px">${D.next?money(D.next.value):'—'}</div>
+      <div class="note">${D.next?esc(fmtDayDate(D.next.payISO))+' · '+nf(D.next.items.length)+' container'+(D.next.items.length===1?'':'s'):'nothing scheduled'}</div></div>
+    <div class="kpi"><div class="lbl">Scheduled ahead</div>
+      <div class="val" style="font-size:19px">${money(D.upcomingTotal)}</div>
+      <div class="note">${nf(D.upcoming.length)} payment date${D.upcoming.length===1?'':'s'}</div></div>
+    <div class="kpi k-green"><div class="lbl">Ready to invoice</div>
+      <div class="val" style="font-size:19px">${nf(D.readyNow.length)}</div>
+      <div class="note">${D.readyNow.length?'statement can be drawn now':'none settled yet'}</div></div>
+    <div class="kpi ${D.awaiting?'k-amber':''}"><div class="lbl">Awaiting confirmation</div>
+      <div class="val" style="font-size:19px">${nf(D.awaiting)}</div>
+      <div class="note">${D.awaiting?'delivery week closed, not marked received':'all up to date'}</div></div>
+  </div>
+  ${D.awaiting?`<div class="minor" style="font-size:12px;margin:0 0 12px;color:var(--amber)">
+    <b>${nf(D.awaiting)} container${D.awaiting===1?'':'s'}</b> should have landed by now but ${D.awaiting===1?'is':'are'} still marked on the water,
+    so the payment${D.awaiting===1?'':'s'} ${D.awaiting===1?'it sits':'they sit'} in ${D.awaiting===1?'is':'are'} still ${D.awaiting===1?'an estimate':'estimates'}.
+    ${/* They are often on a payment date that has already passed, which the Upcoming view hides. */''}
+    <button class="btn sm no-print" style="margin-left:4px" onclick="payShowAwaiting()">Show ${D.awaiting===1?'it':'them'}</button></div>`:''}
+
+  <div class="panel"><div class="tbl-wrap">
+    <table class="pay-tbl"><thead><tr>
+      <th style="width:30px"></th><th style="min-width:150px">Payment date</th>
+      <th style="min-width:130px">Delivery week</th>
+      <th class="num" style="min-width:82px">Containers</th><th class="num" style="min-width:76px">Units</th>
+      <th class="num" style="min-width:130px">To be paid</th>
+      <th style="min-width:160px">Status</th><th class="no-print"></th></tr></thead>
+      <tbody>${payRowsHTML(rows, D)}</tbody></table>
+  </div></div>
+
+  ${D.unscheduled.length?`
+  <h3 style="font-size:14px;margin:22px 0 9px">Not on the schedule</h3>
+  <div class="minor" style="font-size:12px;margin-bottom:8px">These have no date to work from, so they are left out of every total above rather than guessed into one.</div>
+  <div class="panel"><div class="tbl-wrap">
+    <table><thead><tr><th>Container</th><th>Vessel</th><th>Status</th><th>Why</th>
+      <th class="num">Units</th><th class="num">Value</th><th class="no-print">Set delivery date</th></tr></thead><tbody>
+      ${D.unscheduled.map(u=>`<tr>
+        <td class="mono" style="font-weight:600">${esc(u.c.containerNo||'—')}</td>
+        <td>${esc(u.c.vessel||'—')}</td><td class="minor">${esc(u.c.status||'')}</td>
+        <td class="minor">${esc(u.why||'')}</td>
+        <td class="num mono">${nf(u.v.units)}</td><td class="num mono">${money(u.v.value)}</td>
+        <td class="no-print"><input type="date" class="so-date" onchange="setDeliveredAt('${u.c.id}',this.value)"></td></tr>`).join('')}
+    </tbody></table>
+  </div></div>`:''}`;
+}
+
+/* ---------- statement for one payment date ---------- */
+function payStatement(payISO){
+  const r=payData().rows.find(x=>x.payISO===payISO);
+  if(!r){ toast('That payment date is no longer on the schedule'); return; }
+  const bt=(state.settings&&state.settings.billTo)||{};
+  const body=`
+    <div class="doc-head">
+      <div><h1>Payment statement</h1>
+        <div class="sub">Payment due ${esc(fmtDayDate(r.payISO))} · deliveries ${esc(fmtDateShort(r.weekStart))} – ${esc(fmtDateShort(r.weekEnd))}</div></div>
+      <div class="org"><b>${esc(bt.name||'FAIR DISCOUNTERS (PTY) LTD')}</b><br>${esc(bt.vat||'')}<br>${esc(bt.addr||'')}</div>
+    </div>
+    <div class="kpis">
+      <div class="kpi"><div class="k">Containers</div><div class="v">${nf(r.items.length)}</div></div>
+      <div class="kpi"><div class="k">Units</div><div class="v">${nf(r.units)}</div></div>
+      <div class="kpi"><div class="k">Total due</div><div class="v">${money(r.value)}</div></div>
+    </div>
+    <h2>Containers delivered in this week</h2>
+    <table><thead><tr><th>Container</th><th>Vessel</th><th>POL</th><th>Delivered</th>
+      <th class="num">Units</th><th class="num">Value</th></tr></thead>
+      <tbody>${r.items.map(i=>`<tr><td>${esc(i.c.containerNo||'—')}</td><td>${esc(i.c.vessel||'—')}</td>
+        <td>${esc(i.c.pol||'—')}</td><td>${esc(fmtDateShort(i.basis))}${i.kind==='actual'?'':' (expected)'}</td>
+        <td class="num">${nf(i.v.units)}</td><td class="num">${money(i.v.value)}</td></tr>`).join('')}</tbody>
+      <tfoot><tr><td colspan="4">Total due ${esc(fmtDayDate(r.payISO))}</td>
+        <td class="num">${nf(r.units)}</td><td class="num">${money(r.value)}</td></tr></tfoot></table>
+    ${r.unpriced?`<p style="font-size:10px;color:#a00">${nf(r.unpriced)} unit(s) carry no price and are not included: ${esc(r.missing.join(', '))}.</p>`:''}
+    <p style="font-size:10px;color:#666;margin-top:14px">Generated ${esc(fmtDate(todayISO()))}.</p>`;
+  printDoc('Payment statement '+payISO, body, false);
+}
+
+function exportPaymentSchedule(){
+  const D=payData();
+  if(!D.rows.length){ toast('Nothing on the schedule yet'); return; }
+  const H=x=>xcell(x,5);
+  const s1=[['Payment date','Week from','Week to','Containers','Units','Value','Status','Settled','To confirm'].map(H)];
+  D.rows.forEach(r=>s1.push([xdate(r.payISO),xdate(r.weekStart),xdate(r.weekEnd),
+    xcell(r.items.length,2),xcell(r.units,2),xcell(r.value,7),xcell(r.status),
+    xcell(r.ready?'Yes':'No'),xcell(r.awaiting.length,2)]));
+  const s1End=s1.length;
+  s1.push([xcell('Total',1),xcell('',1),xcell('',1),
+    xcell(D.rows.reduce((a,r)=>a+r.items.length,0),3),xcell(D.rows.reduce((a,r)=>a+r.units,0),3),
+    xcell(D.rows.reduce((a,r)=>a+r.value,0),7),xcell('',1),xcell('',1),xcell('',1)]);
+
+  const s2=[['Payment date','Container','Vessel','POL','Terminal','Status','Delivered','Basis','Units','Value'].map(H)];
+  D.rows.forEach(r=>r.items.forEach(i=>s2.push([xdate(r.payISO),xcell(i.c.containerNo||''),xcell(i.c.vessel||''),
+    xcell(i.c.pol||''),xcell(i.c.terminal||''),xcell(i.c.status||''),xdate(i.basis),
+    xcell(i.kind==='actual'?'Confirmed':'Expected'),xcell(i.v.units,2),xcell(i.v.value,7)])));
+  const s2End=s2.length;
+
+  const sheets=[{name:'Payments', aoa:s1, filter:true, filterEnd:s1End, first:true, colW:[14,13,13,12,10,16,15,9,11]},
+                {name:'By container', aoa:s2, filter:true, filterEnd:s2End, colW:[14,16,18,12,12,11,13,11,10,16]}];
+  if(D.unscheduled.length){
+    const s3=[['Container','Vessel','Status','Why','Units','Value'].map(H)];
+    D.unscheduled.forEach(u=>s3.push([xcell(u.c.containerNo||''),xcell(u.c.vessel||''),xcell(u.c.status||''),
+      xcell(u.why||''),xcell(u.v.units,2),xcell(u.v.value,7)]));
+    sheets.push({name:'Not scheduled', aoa:s3, filter:true, filterEnd:s3.length, colW:[16,18,11,42,10,16]});
+  }
+  downloadBytes(makeXlsxBook(sheets), 'payment-schedule-'+todayISO()+'.xlsx');
   toast('Excel downloaded');
 }
 
@@ -2871,6 +3175,7 @@ function viewReports(){
   if(r && r.id==='pnl') return reportPnl();
   if(r && r.id==='priceList') return reportPriceList();
   if(r && r.id==='containerValues') return reportContainerValues();
+  if(r && r.id==='paymentSchedule') return reportPaymentSchedule();
   if(r && r.id==='poOutstanding') return reportPoOutstanding();
   return reportsIndex();
 }
@@ -5225,6 +5530,9 @@ function openPackModal(editId, focusOrderId){
           <div><label>ETD TS port</label><input type="date" id="c_ts_etd" value="${c&&c.tsEtd?c.tsEtd:''}"></div>
           <div><label>TS Vessel</label><input id="c_ts_vessel" value="${esc(c&&c.tsVessel?c.tsVessel:'')}" placeholder="e.g. MSC ANNA"></div>
         </div>
+        ${c&&c.status==='Delivered'?`<div class="field"><label>Delivered on</label>
+          <input type="date" id="c_delivered" value="${c.deliveredAt||''}">
+          <div class="minor" style="font-size:11px;margin-top:3px">This is the date the payment week is worked out from.</div></div>`:''}
         <div class="field"><label>Comment</label><input id="c_comment" value="${esc(c?c.comment:'')}" placeholder="Optional"></div>
         <div class="field"><label>Link</label><input id="c_link" value="${esc(c&&c.link?c.link:'')}" placeholder="e.g. https://example.com/tracking"></div>
         <label style="font-size:12px;font-weight:600;color:var(--txt-2);margin:6px 0 6px;display:block">Stock on this container <span class="req">*</span></label>
@@ -5437,6 +5745,8 @@ function savePackInner(id){
     tsEta: transhipment ? (val('c_ts_eta')||null) : null,
     tsVessel: transhipment ? val('c_ts_vessel').trim() : '',
     lines };
+  /* Only present while editing a delivered container; leave it alone otherwise. */
+  if(document.getElementById('c_delivered')) data.deliveredAt = val('c_delivered')||null;
   if(id){ const c=container(id); if(!c) throw new Error('That container no longer exists — it may have been deleted in another tab.'); Object.assign(c, data); }
   else { state.containers.push({ id:uid('c'), createdAt:Date.now(), status:'On Water', ...data }); }
   const ok=save();
@@ -5450,7 +5760,60 @@ function flashContainer(id){
     card.classList.add('flash'); setTimeout(()=>card.classList.remove('flash'),1700);
   },60);
 }
-function receiveContainer(id){ const c=container(id); c.status='Delivered'; c.deliveredAt=todayISO(); save(); render(); toast('Container received — stock delivered'); }
+/* The delivery date decides which week the container is paid in, so it is asked for
+   rather than assumed. Defaulting to today was fine for a container received the day
+   it landed and wrong for every one entered later. */
+function receiveContainer(id){
+  const c=container(id); if(!c) return;
+  const exp=expDelivOf(c), expISO=exp?isoOf(exp):null;
+  const ov=document.getElementById('overlay');
+  ov.innerHTML=`<div class="modal"><div class="modal-head">
+    <div><h3>Confirm delivery</h3><p>${esc(c.containerNo||'Container')}${c.vessel?' · '+esc(c.vessel):''}</p></div>
+    <div class="spacer"></div><button class="close-x" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      <div class="field"><label>Delivered on <span class="req">*</span></label>
+        <input type="date" id="c_delivdate" value="${todayISO()}" oninput="payPreview()">
+        <div class="minor" style="font-size:11.5px;margin-top:5px">
+          ${c.eta?`ETA was ${esc(fmtDateShort(c.eta))} · expected delivery ${esc(fmtDateShort(expISO))}`
+                 :'No ETA was captured for this container.'}
+          ${expISO?` <button type="button" class="btn sm" style="margin-left:6px" onclick="payUseExpected('${expISO}')">Use ${esc(fmtDateShort(expISO))}</button>`:''}
+        </div>
+      </div>
+      <div class="pay-note" id="c_delivnote"></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" onclick="closeModal()">Cancel</button>
+      <button class="btn primary" onclick="confirmReceive('${c.id}')">Confirm delivery</button>
+    </div></div>`;
+  ov.classList.add('open');
+  payPreview();
+  setTimeout(()=>{ const el=document.getElementById('c_delivdate'); if(el) el.focus(); },60);
+}
+function payUseExpected(iso){ const el=document.getElementById('c_delivdate'); if(el){ el.value=iso; payPreview(); } }
+function payPreview(){
+  const box=document.getElementById('c_delivnote'); if(!box) return;
+  const iso=val('c_delivdate');
+  const pay=payDateFor(iso);
+  box.innerHTML = pay
+    ? `Delivery week <b>${esc(fmtDateShort(payWeekStart(iso)))} – ${esc(fmtDateShort(payWeekEnd(iso)))}</b>
+       &nbsp;·&nbsp; paid <b>${esc(fmtDayDate(pay))}</b>`
+    : `<span class="minor">Pick a date to see which payment it falls into.</span>`;
+}
+function confirmReceive(id){
+  const c=container(id); if(!c) return;
+  const iso=val('c_delivdate');
+  if(!iso){ document.getElementById('c_delivdate').classList.add('err'); toast('Enter the delivery date'); return; }
+  c.status='Delivered'; c.deliveredAt=iso;
+  save(); closeModal(); render();
+  toast('Delivered '+fmtDateShort(iso)+' — paid '+fmtDayDate(payDateFor(iso)));
+}
+/* Used by the Payment schedule to correct a date without reopening the container. */
+function setDeliveredAt(id, iso){
+  const c=container(id); if(!c) return;
+  c.deliveredAt = iso || null;
+  if(iso && c.status!=='Delivered') c.status='Delivered';
+  save(); keepScroll(render);
+}
 function unreceiveContainer(id){ const c=container(id); c.status='On Water'; delete c.deliveredAt; save(); render(); toast('Container reopened'); }
 function deleteContainer(id){ if(!confirm('Delete this container? Its stock returns to production.')) return;
   state.containers=state.containers.filter(c=>c.id!==id); selectedContainers.delete(id);
@@ -5597,7 +5960,42 @@ function applyBulkShip(){
 
 /* ============ MODAL UTIL ============ */
 function val(id){ const e=document.getElementById(id); return e?e.value:''; }
-function closeModal(){ const ov=document.getElementById('overlay'); ov.classList.remove('open'); ov.innerHTML=''; }
+function closeModal(){ const ov=document.getElementById('overlay'); ov.classList.remove('open'); ov.innerHTML='';
+  if(pendingExternal) adoptExternal(); }
+
+/* ============ TWO WINDOWS, ONE STORE ============
+   index.html and tracker.html are the same app with different menus, served from the
+   same folder — so they share an origin and the single localStorage key. Each keeps
+   its own copy of `state` in memory, which means that without this a second window
+   would sit on a stale copy and its next save would quietly wipe out whatever the
+   first window had just done. The storage event fires in every OTHER window when one
+   of them writes, so each one picks the change up.
+
+   While a form is open we hold the update back rather than pulling the data out from
+   under it: taking the new state mid-edit would leave the form writing its fields
+   onto a record that had moved. It is applied the moment the form closes. */
+let pendingExternal = null;
+function adoptExternal(){
+  const next = pendingExternal; pendingExternal = null;
+  if(!next) return;
+  state = next;
+  if(!state.settings) state.settings = { theme:'dark', weekStart:null };
+  if(!Array.isArray(state.orders)) state.orders = [];
+  if(!Array.isArray(state.containers)) state.containers = [];
+  if(!Array.isArray(state.pnl)) state.pnl = [];
+  bumpState();
+  try{ renderNav(); render(); renderBackupBanner(); }catch(e){ console.error(e); }
+}
+window.addEventListener('storage', ev=>{
+  if(ev.key!==STORE_KEY || !ev.newValue) return;
+  let next; try{ next=JSON.parse(ev.newValue); }catch(e){ return; }
+  if(!next || typeof next!=='object') return;
+  pendingExternal = next;
+  const busy = document.getElementById('overlay').classList.contains('open');
+  if(busy){ toast('Another window changed the data — this form is still on the old copy'); return; }
+  adoptExternal();
+  toast('Updated from another window');
+});
 document.getElementById('overlay').addEventListener('mousedown',e=>{ if(e.target.id==='overlay') closeModal(); });
 document.addEventListener('keydown',e=>{ if(e.key==='Escape') closeModal(); });
 
@@ -5715,22 +6113,32 @@ function exportJSON(){
   a.download='order-tracker-backup-'+todayISO()+'.json'; a.click(); toast('Backup downloaded');
   state.settings.lastBackupAt=Date.now(); save(); renderBackupBanner();
 }
+/* Split out of the file picker so the same path can be exercised directly — and so
+   both builds restore a backup through one piece of code rather than two. Returns
+   true only when the data was actually taken on. */
+function restoreFromText(text){
+  let d; try{ d=JSON.parse(text); }catch(e){ toast('That file could not be read'); return false; }
+  if(!d || !Array.isArray(d.orders) || !Array.isArray(d.containers)){
+    toast('That does not look like an Order Tracker backup'); return false; }
+  state=d; if(!state.settings) state.settings={theme:'dark',weekStart:null};
+  if(!state.products) state.products = buildProducts(state.settings.priceBook || DEFAULT_PRICEBOOK);
+  delete state.settings.priceBook;
+  if(!state.settings.billTo) state.settings.billTo={name:'FAIR DISCOUNTERS (PTY) LTD',vat:'VAT: 4150188904',addr:'8 Rente St, Ormonde, JHB, 2091'};
+  if(!state.shippingCharges) state.shippingCharges={ roe:null, rmbToUsd:null, fwdShenzhenNor:null, fwdShenzhenHQ:null, fwdHebei:null, clearing:null, transport:null };
+  if(state.shippingCharges.rmbToUsd===undefined) state.shippingCharges.rmbToUsd=null;
+  if(!Array.isArray(state.pnl)) state.pnl=[];
+  invoiceCtx=null; pendingExternal=null;
+  state.settings.lastBackupAt=Date.now();
+  bumpState();
+  save(); applyTheme(); render(); renderBackupBanner(); toast('Data restored');
+  return true;
+}
 function importJSON(ev){
   const file=ev.target.files[0]; if(!file) return; const rd=new FileReader();
-  rd.onload=()=>{ try{ const d=JSON.parse(rd.result);
-    if(!d.orders||!d.containers) throw 0;
-    if(!confirm('Restore this backup? It replaces all current data.')) return;
-    state=d; if(!state.settings) state.settings={theme:'dark',weekStart:null};
-    if(!state.products) state.products = buildProducts(state.settings.priceBook || DEFAULT_PRICEBOOK);
-    delete state.settings.priceBook;
-    if(!state.settings.billTo) state.settings.billTo={name:'FAIR DISCOUNTERS (PTY) LTD',vat:'VAT: 4150188904',addr:'8 Rente St, Ormonde, JHB, 2091'};
-    if(!state.shippingCharges) state.shippingCharges={ roe:null, rmbToUsd:null, fwdShenzhenNor:null, fwdShenzhenHQ:null, fwdHebei:null, clearing:null, transport:null };
-    if(state.shippingCharges.rmbToUsd===undefined) state.shippingCharges.rmbToUsd=null;
-    if(!Array.isArray(state.pnl)) state.pnl=[];
-    invoiceCtx=null;
-    state.settings.lastBackupAt=Date.now();
-    save(); applyTheme(); render(); renderBackupBanner(); toast('Data restored');
-  }catch(e){ toast('That file could not be read'); } ev.target.value=''; };
+  rd.onload=()=>{
+    if(confirm('Restore this backup? It replaces all current data.')) restoreFromText(rd.result);
+    ev.target.value='';
+  };
   rd.readAsText(file);
 }
 
