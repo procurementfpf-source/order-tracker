@@ -1119,6 +1119,7 @@ const TITLES={
   shipping:['Shipping charges','ROE, forwarding, clearing and transport charges'],
   reports:['Reports','Analysis built from your delivered and in-transit shipments'],
   poOutstanding:['PO outstanding','Every order line still owing, and the month it lands'],
+  paymentSchedule:['Payment schedule','What is owed on each payment Thursday'],
   sync:['Sync','Keep this device in step with your other devices'],
 };
 function go(tab){
@@ -1127,7 +1128,7 @@ function go(tab){
   const [t,s]=TITLES[tab];
   document.getElementById('pageTitle').innerHTML='<h2>'+t+'</h2><p>'+s+'</p>';
   const pa=document.getElementById('primaryAction'), lbl=document.getElementById('primaryActionLbl');
-  pa.style.display = (tab==='statement'||tab==='shipping'||tab==='codeLookup'||tab==='reports'||tab==='sync'||tab==='stock'||tab==='poOutstanding') ? 'none' : '';
+  pa.style.display = (tab==='statement'||tab==='shipping'||tab==='codeLookup'||tab==='reports'||tab==='sync'||tab==='stock'||tab==='poOutstanding'||tab==='paymentSchedule') ? 'none' : '';
   if(tab==='invoice'){ lbl.textContent='New invoice'; pa.onclick=()=>openInvoicePicker(); }
   else if(tab==='products'){ lbl.textContent='Add product'; pa.onclick=()=>productAdd(); }
   else if(tab==='containers'||tab==='warehouse'||tab==='dashboard'){ lbl.textContent='Pack container'; pa.onclick=()=>openPackModal(); }
@@ -1147,7 +1148,7 @@ function render(){
   v.innerHTML = ({
     dashboard:viewDashboard, orders:viewOrders, containers:viewContainers,
     outstanding:viewOutstanding, arrivals:viewArrivals, warehouse:viewWarehouse, buyer:viewBuyer, invoice:viewInvoice, products:viewProducts, statement:viewStatement, shipping:viewShipping, codeLookup:viewCodeLookup, reports:viewReports, stock:viewStock, sync:viewSync,
-    poOutstanding:reportPoOutstanding
+    poOutstanding:reportPoOutstanding, paymentSchedule:reportPaymentSchedule
   }[activeTab])();
   renderNav();
   if(activeTab==='invoice') renderInvoiceItems();
@@ -2947,7 +2948,7 @@ function reportPaymentSchedule(){
   return `
   <div class="print-head"><h1>Payment schedule</h1><p>Much Better Furniture · ${fmtDate(todayISO())}</p></div>
   <div class="toolbar no-print">
-    <button class="btn sm" onclick="closeReport()"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="m15 18-6-6 6-6"/></svg> All reports</button>
+    ${navHas('reports')?`<button class="btn sm" onclick="closeReport()"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="m15 18-6-6 6-6"/></svg> All reports</button>`:''}
     <div class="seg">${seg('upcoming','Upcoming')}${seg('history','History')}${seg('all','All')}</div>
     <button class="btn sm" onclick="payUI.open=new Set(${JSON.stringify(rows.map(r=>r.payISO))});render()">Expand all</button>
     <button class="btn sm" onclick="payUI.open.clear();render()">Collapse all</button>
@@ -2958,7 +2959,8 @@ function reportPaymentSchedule(){
   <div class="minor" style="font-size:12px;margin-bottom:12px">
     Stock delivered Thursday to Wednesday is paid on the Thursday a fortnight after that week opened.
     Delivered containers use the date you confirmed on receipt; those still on the water use expected
-    delivery (ETA plus ${ETA_BUFFER_DAYS} days) and move as the ETA moves.</div>
+    delivery (ETA plus ${ETA_BUFFER_DAYS} days) and move as the ETA moves.
+    Every amount here excludes VAT — VAT at 15% is added on the statement.</div>
   <div class="kpis">
     <div class="kpi k-blue"><div class="lbl">Next payment</div>
       <div class="val" style="font-size:19px">${D.next?money(D.next.value):'—'}</div>
@@ -2984,7 +2986,7 @@ function reportPaymentSchedule(){
       <th style="width:30px"></th><th style="min-width:150px">Payment date</th>
       <th style="min-width:130px">Delivery week</th>
       <th class="num" style="min-width:82px">Containers</th><th class="num" style="min-width:76px">Units</th>
-      <th class="num" style="min-width:130px">To be paid</th>
+      <th class="num" style="min-width:140px">To be paid<span class="minor" style="font-weight:600"> excl VAT</span></th>
       <th style="min-width:160px">Status</th><th class="no-print"></th></tr></thead>
       <tbody>${payRowsHTML(rows, D)}</tbody></table>
   </div></div>
@@ -3005,55 +3007,129 @@ function reportPaymentSchedule(){
   </div></div>`:''}`;
 }
 
-/* ---------- statement for one payment date ---------- */
+/* ---------- statement for one payment date ----------
+   Laid out like the Statement screen already in the app: the same brandbar, seller and
+   invoice-to blocks, the same items table, the same bank footer. The one difference is
+   what fills the rows — containers delivered in the week, rather than invoice PDFs.
+
+   Prices on orders and in the product list are VAT-exclusive, which is why the invoice
+   adds 15% on top rather than backing it out. The statement does the same, so a payment
+   statement and the invoices behind it come to the same figure. */
+const VAT_RATE = 0.15;
+/* Rounded to cents, and the gross built as net + VAT rather than net x 1.15. Taken
+   straight, 1473600 * 1.15 is 1694639.9999999998 in binary floating point: the screen
+   hides it but the Excel cell would carry the fraction, and sub + VAT would not equal
+   total. On a document people pay from, those have to agree exactly. */
+function round2(n){ return Math.round(((Number(n)||0) + Number.EPSILON)*100)/100; }
+function vatOf(n){ return round2((Number(n)||0)*VAT_RATE); }
+function withVat(n){ return round2(round2(n) + vatOf(n)); }
+
+function payStatementDoc(r){
+  const bt=(state.settings&&state.settings.billTo)||{};
+  const sub=r.value, vat=vatOf(sub), tot=sub+vat;
+  return `<style>
+    .brandbar{background:#dceaf7;margin:0 0 16px;padding:14px;text-align:center;border-bottom:2px solid #b9cce6}
+    .brandbar img{height:46px;width:auto;max-width:100%}
+    .st-top{display:flex;justify-content:space-between;gap:24px;align-items:flex-start}
+    .seller div{font-size:10.5px;color:#3a4250;line-height:1.55}
+    .meta{text-align:right}
+    .meta .ttl{font-size:16px;font-weight:700;letter-spacing:.5px;margin-bottom:6px}
+    .metarow{display:flex;justify-content:flex-end;gap:10px;font-size:10.5px;margin-top:2px}
+    .metarow .lbl{color:#697585;font-weight:700}
+    .metarow .val{min-width:96px;text-align:left;font-weight:600}
+    .billto{margin-top:14px}
+    .billto .h{font-size:9px;text-transform:uppercase;letter-spacing:.06em;color:#697585;font-weight:700;margin-bottom:2px}
+    .billto .name{font-size:13px;font-weight:700}
+    .billto div{font-size:10.5px;color:#3a4250;line-height:1.5}
+    table.items{width:100%;border-collapse:collapse;margin-top:16px}
+    table.items th{background:#e9edf3;color:#3a4759;font-size:9.5px;font-weight:700;text-transform:uppercase;
+      letter-spacing:.04em;padding:6px 8px;text-align:left;border-bottom:2px solid #44546a}
+    table.items th.r{text-align:right}
+    table.items td{padding:5px 8px;font-size:11px;border-bottom:1px solid #eceff3}
+    table.items td.no,table.items td.amt{font-family:'SFMono-Regular',Consolas,monospace;font-size:10.5px;white-space:nowrap}
+    table.items td.amt{text-align:right}
+    .st-totals{width:290px;margin-left:auto;margin-top:4px}
+    .st-totals .tr{display:flex;justify-content:space-between;padding:5px 9px;font-size:11.5px}
+    .st-totals .tr.grand{border-top:2px solid #1b2230;font-weight:700;font-size:13.5px}
+    .st-totals .v{font-family:'SFMono-Regular',Consolas,monospace}
+    .bankfoot{margin-top:20px;border-top:1px solid #e3e7ee;padding-top:9px;font-size:10.5px;color:#3a4250;
+      display:flex;gap:24px;flex-wrap:wrap}
+    .bankfoot b{color:#1b2230}
+    .st-note{font-size:9.5px;color:#697585;margin-top:10px}
+    .st-est{color:#9a6b00}
+  </style>
+  <div class="brandbar"><img src="${INV_LOGO}" alt="Much Better Furniture"></div>
+  <div class="st-top">
+    <div class="seller">
+      <div>90 Bhekumuzi Masango Drive, Belfast, Mpumalanga, 1100</div>
+      <div>Tel: 0790453333 &nbsp;·&nbsp; qixingdu89@gmail.com</div>
+      <div>REF: COMPANY &nbsp;·&nbsp; VAT: 4060288406</div>
+    </div>
+    <div class="meta">
+      <div class="ttl">STATEMENT</div>
+      <div class="metarow"><span class="lbl">PAYMENT DATE:</span><span class="val">${esc(fmtDayDate(r.payISO))}</span></div>
+      <div class="metarow"><span class="lbl">DELIVERY WEEK:</span><span class="val">${esc(fmtDateShort(r.weekStart))} – ${esc(fmtDateShort(r.weekEnd))}</span></div>
+      <div class="metarow"><span class="lbl">STATEMENT DATE:</span><span class="val">${esc(fmtDate(todayISO()))}</span></div>
+    </div>
+  </div>
+  <div class="billto">
+    <div class="h">Invoice to</div>
+    <div class="name">${esc(bt.name||'FAIR DISCOUNTERS (PTY) LTD')}</div>
+    <div>${esc(bt.vat||'')}</div>
+    <div>${esc(bt.addr||'')}</div>
+  </div>
+  <table class="items">
+    <thead><tr><th>Container No</th><th>Delivered</th><th>Vessel</th><th>POL</th>
+      <th class="r">Units</th><th class="r">Amount</th></tr></thead>
+    <tbody>${r.items.map(i=>`<tr>
+      <td class="no">${esc(i.c.containerNo||'—')}</td>
+      <td class="no">${esc(fmtDateShort(i.basis))}${i.kind==='actual'?'':' <span class="st-est">(est)</span>'}</td>
+      <td>${esc(i.c.vessel||'—')}</td><td>${esc(i.c.pol||'—')}</td>
+      <td class="amt">${nf(i.v.units)}</td><td class="amt">${esc(money(i.v.value))}</td></tr>`).join('')}
+    </tbody>
+  </table>
+  <div class="st-totals">
+    <div class="tr"><span class="lbl">SUB-TOTAL</span><span class="v">${esc(money(sub))}</span></div>
+    <div class="tr"><span class="lbl">VAT 15%</span><span class="v">${esc(money(vat))}</span></div>
+    <div class="tr grand"><span class="lbl">TOTAL</span><span class="v">${esc(money(tot))}</span></div>
+  </div>
+  <div class="bankfoot">
+    <div><b>BANK DETAILS:</b> FNB BANK</div>
+    <div><b>NAME:</b> Much Better Furniture</div>
+    <div><b>ACC:</b> 62735221161</div>
+  </div>
+  <div class="st-note">${nf(r.items.length)} container${r.items.length===1?'':'s'} delivered
+    ${esc(fmtDateShort(r.weekStart))} – ${esc(fmtDateShort(r.weekEnd))}, due for payment ${esc(fmtDayDate(r.payISO))}.
+    ${r.nExpected?`<b class="st-est">${nf(r.nExpected)} container${r.nExpected===1?'':'s'} marked (est) ${r.nExpected===1?'has':'have'} not been confirmed delivered — ${r.nExpected===1?'that line is':'those lines are'} based on the current ETA.</b>`:''}
+    ${r.unpriced?`<b>${nf(r.unpriced)} unit(s) carry no price and are excluded: ${esc(r.missing.join(', '))}.</b>`:''}</div>`;
+}
 function payStatement(payISO){
   const r=payData().rows.find(x=>x.payISO===payISO);
   if(!r){ toast('That payment date is no longer on the schedule'); return; }
-  const bt=(state.settings&&state.settings.billTo)||{};
-  const body=`
-    <div class="doc-head">
-      <div><h1>Payment statement</h1>
-        <div class="sub">Payment due ${esc(fmtDayDate(r.payISO))} · deliveries ${esc(fmtDateShort(r.weekStart))} – ${esc(fmtDateShort(r.weekEnd))}</div></div>
-      <div class="org"><b>${esc(bt.name||'FAIR DISCOUNTERS (PTY) LTD')}</b><br>${esc(bt.vat||'')}<br>${esc(bt.addr||'')}</div>
-    </div>
-    <div class="kpis">
-      <div class="kpi"><div class="k">Containers</div><div class="v">${nf(r.items.length)}</div></div>
-      <div class="kpi"><div class="k">Units</div><div class="v">${nf(r.units)}</div></div>
-      <div class="kpi"><div class="k">Total due</div><div class="v">${money(r.value)}</div></div>
-    </div>
-    <h2>Containers delivered in this week</h2>
-    <table><thead><tr><th>Container</th><th>Vessel</th><th>POL</th><th>Delivered</th>
-      <th class="num">Units</th><th class="num">Value</th></tr></thead>
-      <tbody>${r.items.map(i=>`<tr><td>${esc(i.c.containerNo||'—')}</td><td>${esc(i.c.vessel||'—')}</td>
-        <td>${esc(i.c.pol||'—')}</td><td>${esc(fmtDateShort(i.basis))}${i.kind==='actual'?'':' (expected)'}</td>
-        <td class="num">${nf(i.v.units)}</td><td class="num">${money(i.v.value)}</td></tr>`).join('')}</tbody>
-      <tfoot><tr><td colspan="4">Total due ${esc(fmtDayDate(r.payISO))}</td>
-        <td class="num">${nf(r.units)}</td><td class="num">${money(r.value)}</td></tr></tfoot></table>
-    ${r.unpriced?`<p style="font-size:10px;color:#a00">${nf(r.unpriced)} unit(s) carry no price and are not included: ${esc(r.missing.join(', '))}.</p>`:''}
-    <p style="font-size:10px;color:#666;margin-top:14px">Generated ${esc(fmtDate(todayISO()))}.</p>`;
-  printDoc('Payment statement '+payISO, body, false);
+  printDoc('Payment statement '+payISO, payStatementDoc(r), false);
 }
 
 function exportPaymentSchedule(){
   const D=payData();
   if(!D.rows.length){ toast('Nothing on the schedule yet'); return; }
   const H=x=>xcell(x,5);
-  const s1=[['Payment date','Week from','Week to','Containers','Units','Value','Status','Settled','To confirm'].map(H)];
+  const s1=[['Payment date','Week from','Week to','Containers','Units',
+    'Value (excl VAT)','Status','Settled','To confirm'].map(H)];
   D.rows.forEach(r=>s1.push([xdate(r.payISO),xdate(r.weekStart),xdate(r.weekEnd),
-    xcell(r.items.length,2),xcell(r.units,2),xcell(r.value,7),xcell(r.status),
-    xcell(r.ready?'Yes':'No'),xcell(r.awaiting.length,2)]));
+    xcell(r.items.length,2),xcell(r.units,2),xcell(r.value,7),
+    xcell(r.status),xcell(r.ready?'Yes':'No'),xcell(r.awaiting.length,2)]));
   const s1End=s1.length;
   s1.push([xcell('Total',1),xcell('',1),xcell('',1),
     xcell(D.rows.reduce((a,r)=>a+r.items.length,0),3),xcell(D.rows.reduce((a,r)=>a+r.units,0),3),
     xcell(D.rows.reduce((a,r)=>a+r.value,0),7),xcell('',1),xcell('',1),xcell('',1)]);
 
-  const s2=[['Payment date','Container','Vessel','POL','Terminal','Status','Delivered','Basis','Units','Value'].map(H)];
+  const s2=[['Payment date','Container','Vessel','POL','Terminal','Status','Delivered','Basis','Units','Value (excl VAT)'].map(H)];
   D.rows.forEach(r=>r.items.forEach(i=>s2.push([xdate(r.payISO),xcell(i.c.containerNo||''),xcell(i.c.vessel||''),
     xcell(i.c.pol||''),xcell(i.c.terminal||''),xcell(i.c.status||''),xdate(i.basis),
     xcell(i.kind==='actual'?'Confirmed':'Expected'),xcell(i.v.units,2),xcell(i.v.value,7)])));
   const s2End=s2.length;
 
-  const sheets=[{name:'Payments', aoa:s1, filter:true, filterEnd:s1End, first:true, colW:[14,13,13,12,10,16,15,9,11]},
+  const sheets=[{name:'Payments', aoa:s1, filter:true, filterEnd:s1End, first:true, colW:[14,13,13,12,10,18,15,9,11]},
                 {name:'By container', aoa:s2, filter:true, filterEnd:s2End, colW:[14,16,18,12,12,11,13,11,10,16]}];
   if(D.unscheduled.length){
     const s3=[['Container','Vessel','Status','Why','Units','Value'].map(H)];
