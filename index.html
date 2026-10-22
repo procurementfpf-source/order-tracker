@@ -1054,6 +1054,8 @@ function _fmtCached(key, opts, d){
 }
 function fmtDate(d){ return _fmtCached('long',{day:'numeric',month:'short',year:'numeric'},d); }
 function fmtDateShort(d){ return _fmtCached('short',{day:'numeric',month:'short'},d); }
+/* "17 September 2026" — the form the statement header has always used. */
+function fmtDateLong(d){ return _fmtCached('verylong',{day:'numeric',month:'long',year:'numeric'},d); }
 function monthKey(d){ const x=(typeof d==='string')?new Date(d+'T00:00:00'):d; return x.getFullYear()+'-'+String(x.getMonth()+1).padStart(2,'0'); }
 function monthLabel(d){ const x=(typeof d==='string')?new Date(d+'T00:00:00'):d; return _dtf('mon',{month:'short',year:'2-digit'}).format(x); }
 function startOfWeek(d){ const x=new Date(d); const day=(x.getDay()+6)%7; x.setDate(x.getDate()-day); x.setHours(0,0,0,0); return x; }
@@ -2851,6 +2853,10 @@ function exportPoOutstanding(){
    a confirmed delivery date, the amount is settled — and a statement can be drawn
    then, rather than waiting for the payment date itself. */
 let payUI={mode:'upcoming', open:new Set()};
+/* The focused build drops the whole Statement column rather than greying it out —
+   a column of dead buttons is worse than no column. Everything else about the report
+   is identical, so this is the only thing the build has to flip. */
+const PAY_STATEMENT = true;
 
 function payData(){
   const today=todayISO();
@@ -2879,6 +2885,9 @@ function payData(){
        and nobody marked them received. That is the gap worth chasing. */
     r.awaiting = r.closed ? r.items.filter(i=>i.kind!=='actual') : [];
     r.status = r.nExpected===0 ? 'Confirmed' : (r.nActual? 'Part confirmed' : 'Estimated');
+    /* The statement is a list of invoice numbers. One that is missing prints as a blank
+       line, so it is worth seeing here rather than on the customer's copy. */
+    r.noInvoice = r.items.filter(i=>!i.c.invNo);
   });
   const upcoming=rows.filter(r=>!r.past), history=rows.filter(r=>r.past).reverse();
   const awaiting=rows.reduce((a,r)=>a+r.awaiting.length,0);
@@ -2900,7 +2909,7 @@ function payShowAwaiting(){
 function paySetMode(m){ payUI.mode=m; payUI.open.clear(); render(); }
 
 function payRowsHTML(rows, D){
-  if(!rows.length) return `<tr><td colspan="7">${emptyBlock('Nothing here','box',
+  if(!rows.length) return `<tr><td colspan="${PAY_STATEMENT?8:7}">${emptyBlock('Nothing here','box',
     payUI.mode==='history'?'No payment dates have passed yet.':'No containers are scheduled for payment.')}</td></tr>`;
   return rows.map(r=>{
     const open=payUI.open.has(r.payISO);
@@ -2918,15 +2927,17 @@ function payRowsHTML(rows, D){
       <td class="num mono pay-total" title="Click for the breakdown" onclick="payToggle('${r.payISO}')">
         <b>${money(r.value)}</b>${r.unpriced?`<span class="minor" title="${esc(r.missing.join(', '))}"> +${nf(r.unpriced)} unpriced</span>`:''}</td>
       <td><span class="badge-st ${cls}" title="${esc(r.nExpected? r.nExpected+' container(s) still on the water — this figure moves with their ETA' : 'Every container has a confirmed delivery date')}">${r.status}</span>
-        ${r.awaiting.length?`<span class="badge-st st-red" style="margin-left:5px" title="The delivery week has closed but these are still marked on the water">${r.awaiting.length} to confirm</span>`:''}</td>
-      <td class="no-print" style="text-align:right">
+        ${r.awaiting.length?`<span class="badge-st st-red" style="margin-left:5px" title="The delivery week has closed but these are still marked on the water">${r.awaiting.length} to confirm</span>`:''}
+        ${r.noInvoice.length?`<span class="badge-st st-amber" style="margin-left:5px" title="These have no invoice number, so they would print blank on the statement — generate the invoice, or set the number on the container">${r.noInvoice.length} not invoiced</span>`:''}</td>
+      ${PAY_STATEMENT?`<td class="no-print" style="text-align:right">
         ${r.ready?`<button class="btn sm primary" onclick="payStatement('${r.payISO}')">Statement</button>`
-                 :`<button class="btn sm" disabled title="Available once the delivery week has closed and every container has a confirmed delivery date">Statement</button>`}</td>
+                 :`<button class="btn sm" disabled title="Available once the delivery week has closed and every container has a confirmed delivery date">Statement</button>`}</td>`:''}
     </tr>`+
-    (open?`<tr class="pay-detail"><td colspan="8"><div class="pay-detail-inner">
-      <table class="pay-sub"><thead><tr><th>Container</th><th>Vessel</th><th>POL</th>
+    (open?`<tr class="pay-detail"><td colspan="${PAY_STATEMENT?8:7}"><div class="pay-detail-inner">
+      <table class="pay-sub"><thead><tr><th>Invoice no</th><th>Container</th><th>Vessel</th><th>POL</th>
         <th>Delivered</th><th>Basis</th><th class="num">Units</th><th class="num">Value</th></tr></thead><tbody>
         ${r.items.map(i=>`<tr>
+          <td class="mono">${i.c.invNo?esc(i.c.invNo):'<span class="minor" title="No invoice number — it will print blank on the statement">not invoiced</span>'}</td>
           <td class="mono" style="font-weight:600">${esc(i.c.containerNo||'—')}</td>
           <td>${esc(i.c.vessel||'—')}</td><td class="minor">${esc(i.c.pol||'—')}</td>
           <td class="mono">${esc(fmtDateShort(i.basis))}</td>
@@ -2935,7 +2946,7 @@ function payRowsHTML(rows, D){
             : `<span class="pay-kind est">Expected</span> <input type="date" class="so-date" value="" title="Enter the real delivery date to confirm it" onchange="setDeliveredAt('${i.c.id}',this.value)">`}</td>
           <td class="num mono">${nf(i.v.units)}</td>
           <td class="num mono">${money(i.v.value)}</td></tr>`).join('')}
-        <tr class="group-row"><td colspan="5">Total</td>
+        <tr class="group-row"><td colspan="6">Total</td>
           <td class="num">${nf(r.units)}</td><td class="num">${money(r.value)}</td></tr>
       </tbody></table></div></td></tr>`:'');
   }).join('');
@@ -2970,7 +2981,7 @@ function reportPaymentSchedule(){
       <div class="note">${nf(D.upcoming.length)} payment date${D.upcoming.length===1?'':'s'}</div></div>
     <div class="kpi k-green"><div class="lbl">Ready to invoice</div>
       <div class="val" style="font-size:19px">${nf(D.readyNow.length)}</div>
-      <div class="note">${D.readyNow.length?'statement can be drawn now':'none settled yet'}</div></div>
+      <div class="note">${D.readyNow.length?(PAY_STATEMENT?'statement can be drawn now':'settled, nothing left to confirm'):'none settled yet'}</div></div>
     <div class="kpi ${D.awaiting?'k-amber':''}"><div class="lbl">Awaiting confirmation</div>
       <div class="val" style="font-size:19px">${nf(D.awaiting)}</div>
       <div class="note">${D.awaiting?'delivery week closed, not marked received':'all up to date'}</div></div>
@@ -2987,7 +2998,7 @@ function reportPaymentSchedule(){
       <th style="min-width:130px">Delivery week</th>
       <th class="num" style="min-width:82px">Containers</th><th class="num" style="min-width:76px">Units</th>
       <th class="num" style="min-width:140px">To be paid<span class="minor" style="font-weight:600"> excl VAT</span></th>
-      <th style="min-width:160px">Status</th><th class="no-print"></th></tr></thead>
+      <th style="min-width:160px">Status</th>${PAY_STATEMENT?'<th class="no-print"></th>':''}</tr></thead>
       <tbody>${payRowsHTML(rows, D)}</tbody></table>
   </div></div>
 
@@ -3026,37 +3037,47 @@ function withVat(n){ return round2(round2(n) + vatOf(n)); }
 
 function payStatementDoc(r){
   const bt=(state.settings&&state.settings.billTo)||{};
-  const sub=r.value, vat=vatOf(sub), tot=sub+vat;
+  /* Invoice order, which is also date order in practice. A container that has not been
+     invoiced yet sorts last rather than disappearing — a blank line is a prompt to go
+     and raise the invoice, a missing line would quietly understate the statement. */
+  const rows=r.items.slice().sort((a,b)=>
+    String(a.c.invDate||'~').localeCompare(String(b.c.invDate||'~'))
+    || String(a.c.invNo||'~').localeCompare(String(b.c.invNo||'~'),undefined,{numeric:true}));
+  let run=0;
+  const lines=rows.map(i=>{ const amt=withVat(i.v.value); run=round2(run+amt);
+    return {i, amt, run}; });
+  const total=lines.length? lines[lines.length-1].run : 0;
   return `<style>
     .brandbar{background:#dceaf7;margin:0 0 16px;padding:14px;text-align:center;border-bottom:2px solid #b9cce6}
     .brandbar img{height:46px;width:auto;max-width:100%}
-    .st-top{display:flex;justify-content:space-between;gap:24px;align-items:flex-start}
+    .st-top{display:flex;justify-content:space-between;gap:24px;align-items:flex-start;
+      border-bottom:2px solid #1b2230;padding-bottom:10px}
     .seller div{font-size:10.5px;color:#3a4250;line-height:1.55}
     .meta{text-align:right}
     .meta .ttl{font-size:16px;font-weight:700;letter-spacing:.5px;margin-bottom:6px}
     .metarow{display:flex;justify-content:flex-end;gap:10px;font-size:10.5px;margin-top:2px}
-    .metarow .lbl{color:#697585;font-weight:700}
-    .metarow .val{min-width:96px;text-align:left;font-weight:600}
+    .metarow .lbl{color:#3a4250;font-weight:700}
+    .metarow .val{font-weight:700}
     .billto{margin-top:14px}
     .billto .h{font-size:9px;text-transform:uppercase;letter-spacing:.06em;color:#697585;font-weight:700;margin-bottom:2px}
     .billto .name{font-size:13px;font-weight:700}
     .billto div{font-size:10.5px;color:#3a4250;line-height:1.5}
     table.items{width:100%;border-collapse:collapse;margin-top:16px}
     table.items th{background:#e9edf3;color:#3a4759;font-size:9.5px;font-weight:700;text-transform:uppercase;
-      letter-spacing:.04em;padding:6px 8px;text-align:left;border-bottom:2px solid #44546a}
+      letter-spacing:.04em;padding:7px 9px;text-align:left;border-bottom:2px solid #44546a}
     table.items th.r{text-align:right}
-    table.items td{padding:5px 8px;font-size:11px;border-bottom:1px solid #eceff3}
-    table.items td.no,table.items td.amt{font-family:'SFMono-Regular',Consolas,monospace;font-size:10.5px;white-space:nowrap}
+    table.items td{padding:6px 9px;font-size:11px;border-bottom:1px solid #eceff3}
+    table.items td.no,table.items td.desc,table.items td.amt{
+      font-family:'SFMono-Regular',Consolas,monospace;font-size:10.5px;white-space:nowrap}
+    table.items td.no{font-weight:600}
     table.items td.amt{text-align:right}
-    .st-totals{width:290px;margin-left:auto;margin-top:4px}
-    .st-totals .tr{display:flex;justify-content:space-between;padding:5px 9px;font-size:11.5px}
-    .st-totals .tr.grand{border-top:2px solid #1b2230;font-weight:700;font-size:13.5px}
-    .st-totals .v{font-family:'SFMono-Regular',Consolas,monospace}
+    .st-totals{width:330px;margin-left:auto;margin-top:2px}
+    .st-totals .tr{display:flex;justify-content:space-between;gap:18px;padding:8px 9px;
+      border-top:2px solid #1b2230;font-weight:700;font-size:13px}
+    .st-totals .v{font-family:'SFMono-Regular',Consolas,monospace;font-size:14px}
     .bankfoot{margin-top:20px;border-top:1px solid #e3e7ee;padding-top:9px;font-size:10.5px;color:#3a4250;
       display:flex;gap:24px;flex-wrap:wrap}
     .bankfoot b{color:#1b2230}
-    .st-note{font-size:9.5px;color:#697585;margin-top:10px}
-    .st-est{color:#9a6b00}
   </style>
   <div class="brandbar"><img src="${INV_LOGO}" alt="Much Better Furniture"></div>
   <div class="st-top">
@@ -3067,41 +3088,34 @@ function payStatementDoc(r){
     </div>
     <div class="meta">
       <div class="ttl">STATEMENT</div>
-      <div class="metarow"><span class="lbl">PAYMENT DATE:</span><span class="val">${esc(fmtDayDate(r.payISO))}</span></div>
-      <div class="metarow"><span class="lbl">DELIVERY WEEK:</span><span class="val">${esc(fmtDateShort(r.weekStart))} – ${esc(fmtDateShort(r.weekEnd))}</span></div>
-      <div class="metarow"><span class="lbl">STATEMENT DATE:</span><span class="val">${esc(fmtDate(todayISO()))}</span></div>
+      <div class="metarow"><span class="lbl">STATEMENT DATE:</span><span class="val">${esc(fmtDateLong(todayISO()))}</span></div>
     </div>
   </div>
   <div class="billto">
     <div class="h">Invoice to</div>
-    <div class="name">${esc(bt.name||'FAIR DISCOUNTERS (PTY) LTD')}</div>
+    <div class="name">${esc(bt.name||'Fair Discounters (PTY) Ltd')}</div>
     <div>${esc(bt.vat||'')}</div>
     <div>${esc(bt.addr||'')}</div>
   </div>
   <table class="items">
-    <thead><tr><th>Container No</th><th>Delivered</th><th>Vessel</th><th>POL</th>
-      <th class="r">Units</th><th class="r">Amount</th></tr></thead>
-    <tbody>${r.items.map(i=>`<tr>
-      <td class="no">${esc(i.c.containerNo||'—')}</td>
-      <td class="no">${esc(fmtDateShort(i.basis))}${i.kind==='actual'?'':' <span class="st-est">(est)</span>'}</td>
-      <td>${esc(i.c.vessel||'—')}</td><td>${esc(i.c.pol||'—')}</td>
-      <td class="amt">${nf(i.v.units)}</td><td class="amt">${esc(money(i.v.value))}</td></tr>`).join('')}
+    <thead><tr><th>Invoice No</th><th>Date</th><th>Description</th>
+      <th class="r">Invoice Total</th><th class="r">Total</th></tr></thead>
+    <tbody>${lines.map(l=>`<tr>
+      <td class="no">${esc(l.i.c.invNo||'—')}</td>
+      <td>${esc(l.i.c.invDate?fmtDate(l.i.c.invDate):'—')}</td>
+      <td class="desc">${esc(l.i.c.containerNo||'—')}</td>
+      <td class="amt">${esc(money(l.amt))}</td>
+      <td class="amt">${esc(money(l.run))}</td></tr>`).join('')}
     </tbody>
   </table>
   <div class="st-totals">
-    <div class="tr"><span class="lbl">SUB-TOTAL</span><span class="v">${esc(money(sub))}</span></div>
-    <div class="tr"><span class="lbl">VAT 15%</span><span class="v">${esc(money(vat))}</span></div>
-    <div class="tr grand"><span class="lbl">TOTAL</span><span class="v">${esc(money(tot))}</span></div>
+    <div class="tr"><span class="lbl">TOTAL (incl VAT)</span><span class="v">${esc(money(total))}</span></div>
   </div>
   <div class="bankfoot">
     <div><b>BANK DETAILS:</b> FNB BANK</div>
     <div><b>NAME:</b> Much Better Furniture</div>
     <div><b>ACC:</b> 62735221161</div>
-  </div>
-  <div class="st-note">${nf(r.items.length)} container${r.items.length===1?'':'s'} delivered
-    ${esc(fmtDateShort(r.weekStart))} – ${esc(fmtDateShort(r.weekEnd))}, due for payment ${esc(fmtDayDate(r.payISO))}.
-    ${r.nExpected?`<b class="st-est">${nf(r.nExpected)} container${r.nExpected===1?'':'s'} marked (est) ${r.nExpected===1?'has':'have'} not been confirmed delivered — ${r.nExpected===1?'that line is':'those lines are'} based on the current ETA.</b>`:''}
-    ${r.unpriced?`<b>${nf(r.unpriced)} unit(s) carry no price and are excluded: ${esc(r.missing.join(', '))}.</b>`:''}</div>`;
+  </div>`;
 }
 function payStatement(payISO){
   const r=payData().rows.find(x=>x.payISO===payISO);
@@ -4464,8 +4478,14 @@ function blankInvoiceCtx(){ return { containerId:'', invNo:nextInvNo(), date:tod
 function generateInvoice(containerId){
   const c=container(containerId); if(!c) return;
   const items=itemsFromContainer(c);
-  invoiceCtx = { containerId, invNo:nextInvNo(), date:todayISO(), contNo:c.containerNo||'—', poNo:poFromItems(items), showPo:true, items };
-  save(); go('invoice'); toast('Invoice generated from '+(c.containerNo||'container'));
+  const no=nextInvNo(), date=todayISO();
+  /* Only one invoice is held in invoiceCtx at a time, so the number used to be lost the
+     moment the next one was raised. The statement is a list of invoice numbers, so the
+     container keeps its own. An existing number is not overwritten — re-opening an
+     invoice to reprint it must not renumber what the customer already has. */
+  if(!c.invNo){ c.invNo=no; c.invDate=date; }
+  invoiceCtx = { containerId, invNo:c.invNo||no, date:c.invDate||date, contNo:c.containerNo||'—', poNo:poFromItems(items), showPo:true, items };
+  save(); go('invoice'); toast('Invoice '+invoiceCtx.invNo+' from '+(c.containerNo||'container'));
 }
 function toggleInvoicePo(){ if(!invoiceCtx) return; invoiceCtx.showPo = !invoiceCtx.showPo; save(); render(); }
 function openInvoicePicker(){
@@ -5609,6 +5629,11 @@ function openPackModal(editId, focusOrderId){
         ${c&&c.status==='Delivered'?`<div class="field"><label>Delivered on</label>
           <input type="date" id="c_delivered" value="${c.deliveredAt||''}">
           <div class="minor" style="font-size:11px;margin-top:3px">This is the date the payment week is worked out from.</div></div>`:''}
+        ${c?`<div class="field row">
+          <div><label>Invoice no</label><input id="c_invno" class="mono" value="${esc(c.invNo||'')}" placeholder="e.g. INV2026108">
+            <div class="minor" style="font-size:11px;margin-top:3px">Filled in automatically when you generate an invoice. Set it here for older containers.</div></div>
+          <div><label>Invoice date</label><input type="date" id="c_invdate" value="${c.invDate||''}"></div>
+        </div>`:''}
         <div class="field"><label>Comment</label><input id="c_comment" value="${esc(c?c.comment:'')}" placeholder="Optional"></div>
         <div class="field"><label>Link</label><input id="c_link" value="${esc(c&&c.link?c.link:'')}" placeholder="e.g. https://example.com/tracking"></div>
         <label style="font-size:12px;font-weight:600;color:var(--txt-2);margin:6px 0 6px;display:block">Stock on this container <span class="req">*</span></label>
@@ -5823,6 +5848,7 @@ function savePackInner(id){
     lines };
   /* Only present while editing a delivered container; leave it alone otherwise. */
   if(document.getElementById('c_delivered')) data.deliveredAt = val('c_delivered')||null;
+  if(document.getElementById('c_invno')){ data.invNo = val('c_invno').trim()||null; data.invDate = val('c_invdate')||null; }
   if(id){ const c=container(id); if(!c) throw new Error('That container no longer exists — it may have been deleted in another tab.'); Object.assign(c, data); }
   else { state.containers.push({ id:uid('c'), createdAt:Date.now(), status:'On Water', ...data }); }
   const ok=save();
