@@ -3040,9 +3040,12 @@ function payStatementDoc(r){
   /* Invoice order, which is also date order in practice. A container that has not been
      invoiced yet sorts last rather than disappearing — a blank line is a prompt to go
      and raise the invoice, a missing line would quietly understate the statement. */
-  const rows=r.items.slice().sort((a,b)=>
-    String(a.c.invDate||'~').localeCompare(String(b.c.invDate||'~'))
-    || String(a.c.invNo||'~').localeCompare(String(b.c.invNo||'~'),undefined,{numeric:true}));
+  const rows=r.items.slice().sort((a,b)=>{
+    const x=splitInvNo(a.c.invNo), y=splitInvNo(b.c.invNo);
+    if(x&&y) return x.pre.localeCompare(y.pre) || (x.n-y.n);
+    if(x) return -1; if(y) return 1;              // un-numbered lines sort last
+    return String(a.basis||'~').localeCompare(String(b.basis||'~'));
+  });
   let run=0;
   const lines=rows.map(i=>{ const amt=withVat(i.v.value); run=round2(run+amt);
     return {i, amt, run}; });
@@ -3102,7 +3105,7 @@ function payStatementDoc(r){
       <th class="r">Invoice Total</th><th class="r">Total</th></tr></thead>
     <tbody>${lines.map(l=>`<tr>
       <td class="no">${esc(l.i.c.invNo||'—')}</td>
-      <td>${esc(l.i.c.invDate?fmtDate(l.i.c.invDate):'—')}</td>
+      <td>${esc(l.i.basis?fmtDate(l.i.basis):'—')}</td>
       <td class="desc">${esc(l.i.c.containerNo||'—')}</td>
       <td class="amt">${esc(money(l.amt))}</td>
       <td class="amt">${esc(money(l.run))}</td></tr>`).join('')}
@@ -4474,17 +4477,33 @@ function itemsFromContainer(c){
 }
 function poFromItems(items){ return [...new Set((items||[]).flatMap(it=>it.pos||[]).filter(Boolean))].join(', '); }
 function nextInvNo(){ const y=new Date().getFullYear(); state.settings.invSeq=(state.settings.invSeq||56)+1; return 'INV'+y+String(state.settings.invSeq).padStart(3,'0'); }
+/* The next number in the series, read off the numbers already on containers rather than
+   from a counter: a counter drifts the moment one is typed in by hand, or a container is
+   deleted, and it has to be bumped to be read — so merely opening a dialog and cancelling
+   would burn a number. This is pure, so it can be used as a suggestion safely.
+   Numbers are split into a prefix and a numeric tail (INV2026114 -> INV2026 + 114). The
+   highest prefix wins first, so a stray INV2025999 cannot drag the series backwards. */
+function splitInvNo(no){ const m=String(no||'').match(/^(.*?)(\d+)$/);
+  return m? {pre:m[1], n:parseInt(m[2],10), w:m[2].length} : null; }
+function suggestInvNo(){
+  const used=(state.containers||[]).map(c=>splitInvNo(c.invNo)).filter(Boolean);
+  if(used.length){
+    const pre=used.map(u=>u.pre).sort().pop();
+    const same=used.filter(u=>u.pre===pre);
+    const top=same.reduce((a,u)=>u.n>a.n?u:a, same[0]);
+    return pre + String(top.n+1).padStart(top.w,'0');
+  }
+  const y=new Date().getFullYear();
+  return 'INV'+y+String((state.settings.invSeq||56)+1).padStart(3,'0');
+}
 function blankInvoiceCtx(){ return { containerId:'', invNo:nextInvNo(), date:todayISO(), contNo:'—', poNo:'', showPo:true, items:[] }; }
 function generateInvoice(containerId){
   const c=container(containerId); if(!c) return;
   const items=itemsFromContainer(c);
-  const no=nextInvNo(), date=todayISO();
-  /* Only one invoice is held in invoiceCtx at a time, so the number used to be lost the
-     moment the next one was raised. The statement is a list of invoice numbers, so the
-     container keeps its own. An existing number is not overwritten — re-opening an
+  /* The container keeps its own number, set when it was marked delivered. Reopening an
      invoice to reprint it must not renumber what the customer already has. */
-  if(!c.invNo){ c.invNo=no; c.invDate=date; }
-  invoiceCtx = { containerId, invNo:c.invNo||no, date:c.invDate||date, contNo:c.containerNo||'—', poNo:poFromItems(items), showPo:true, items };
+  if(!c.invNo) c.invNo=suggestInvNo();
+  invoiceCtx = { containerId, invNo:c.invNo, date:c.deliveredAt||todayISO(), contNo:c.containerNo||'—', poNo:poFromItems(items), showPo:true, items };
   save(); go('invoice'); toast('Invoice '+invoiceCtx.invNo+' from '+(c.containerNo||'container'));
 }
 function toggleInvoicePo(){ if(!invoiceCtx) return; invoiceCtx.showPo = !invoiceCtx.showPo; save(); render(); }
@@ -5629,11 +5648,9 @@ function openPackModal(editId, focusOrderId){
         ${c&&c.status==='Delivered'?`<div class="field"><label>Delivered on</label>
           <input type="date" id="c_delivered" value="${c.deliveredAt||''}">
           <div class="minor" style="font-size:11px;margin-top:3px">This is the date the payment week is worked out from.</div></div>`:''}
-        ${c?`<div class="field row">
-          <div><label>Invoice no</label><input id="c_invno" class="mono" value="${esc(c.invNo||'')}" placeholder="e.g. INV2026108">
-            <div class="minor" style="font-size:11px;margin-top:3px">Filled in automatically when you generate an invoice. Set it here for older containers.</div></div>
-          <div><label>Invoice date</label><input type="date" id="c_invdate" value="${c.invDate||''}"></div>
-        </div>`:''}
+        ${c?`<div class="field"><label>Invoice no</label>
+          <input id="c_invno" class="mono" value="${esc(c.invNo||'')}" placeholder="e.g. INV2026115">
+          <div class="minor" style="font-size:11px;margin-top:3px">Set when the container is marked delivered. The delivery date above is used as the invoice date.</div></div>`:''}
         <div class="field"><label>Comment</label><input id="c_comment" value="${esc(c?c.comment:'')}" placeholder="Optional"></div>
         <div class="field"><label>Link</label><input id="c_link" value="${esc(c&&c.link?c.link:'')}" placeholder="e.g. https://example.com/tracking"></div>
         <label style="font-size:12px;font-weight:600;color:var(--txt-2);margin:6px 0 6px;display:block">Stock on this container <span class="req">*</span></label>
@@ -5848,7 +5865,7 @@ function savePackInner(id){
     lines };
   /* Only present while editing a delivered container; leave it alone otherwise. */
   if(document.getElementById('c_delivered')) data.deliveredAt = val('c_delivered')||null;
-  if(document.getElementById('c_invno')){ data.invNo = val('c_invno').trim()||null; data.invDate = val('c_invdate')||null; }
+  if(document.getElementById('c_invno')) data.invNo = val('c_invno').trim()||null;
   if(id){ const c=container(id); if(!c) throw new Error('That container no longer exists — it may have been deleted in another tab.'); Object.assign(c, data); }
   else { state.containers.push({ id:uid('c'), createdAt:Date.now(), status:'On Water', ...data }); }
   const ok=save();
@@ -5873,12 +5890,21 @@ function receiveContainer(id){
     <div><h3>Confirm delivery</h3><p>${esc(c.containerNo||'Container')}${c.vessel?' · '+esc(c.vessel):''}</p></div>
     <div class="spacer"></div><button class="close-x" onclick="closeModal()">✕</button></div>
     <div class="modal-body">
-      <div class="field"><label>Delivered on <span class="req">*</span></label>
-        <input type="date" id="c_delivdate" value="${todayISO()}" oninput="payPreview()">
-        <div class="minor" style="font-size:11.5px;margin-top:5px">
-          ${c.eta?`ETA was ${esc(fmtDateShort(c.eta))} · expected delivery ${esc(fmtDateShort(expISO))}`
-                 :'No ETA was captured for this container.'}
-          ${expISO?` <button type="button" class="btn sm" style="margin-left:6px" onclick="payUseExpected('${expISO}')">Use ${esc(fmtDateShort(expISO))}</button>`:''}
+      <div class="field row">
+        <div><label>Delivered on <span class="req">*</span></label>
+          <input type="date" id="c_delivdate" value="${todayISO()}" oninput="payPreview()">
+          <div class="minor" style="font-size:11.5px;margin-top:5px">
+            ${c.eta?`ETA was ${esc(fmtDateShort(c.eta))} · expected ${esc(fmtDateShort(expISO))}`
+                   :'No ETA was captured.'}
+            ${expISO?` <button type="button" class="btn sm" style="margin-left:4px" onclick="payUseExpected('${expISO}')">Use ${esc(fmtDateShort(expISO))}</button>`:''}
+          </div>
+        </div>
+        <div><label>Invoice number</label>
+          <input id="c_delivinv" class="mono" value="${esc(c.invNo||suggestInvNo())}" placeholder="e.g. INV2026115">
+          <div class="minor" style="font-size:11.5px;margin-top:5px">
+            ${c.invNo?'Already invoiced — change it only if the number is wrong.'
+                     :'Next in the series. Edit it if this one is out of step.'}
+          </div>
         </div>
       </div>
       <div class="pay-note" id="c_delivnote"></div>
@@ -5906,8 +5932,9 @@ function confirmReceive(id){
   const iso=val('c_delivdate');
   if(!iso){ document.getElementById('c_delivdate').classList.add('err'); toast('Enter the delivery date'); return; }
   c.status='Delivered'; c.deliveredAt=iso;
+  c.invNo = val('c_delivinv').trim() || null;
   save(); closeModal(); render();
-  toast('Delivered '+fmtDateShort(iso)+' — paid '+fmtDayDate(payDateFor(iso)));
+  toast('Delivered '+fmtDateShort(iso)+(c.invNo?' · '+c.invNo:'')+' — paid '+fmtDayDate(payDateFor(iso)));
 }
 /* Used by the Payment schedule to correct a date without reopening the container. */
 function setDeliveredAt(id, iso){
