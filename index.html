@@ -664,6 +664,26 @@ body.cg-locked .cg-exit{display:inline-flex}
 .cg-wrap.so-wrap,.cg-wrap.po-wrap{max-height:calc(100vh - 150px)}
 .cg-wrap.so-wrap.cg-full,.cg-wrap.po-wrap.cg-full{max-height:none}
 @media (max-width:900px){ .cg-wrap.so-wrap,.cg-wrap.po-wrap{max-height:calc(100vh - 132px)} }
+/* Packing list review — a dense table inside a modal, so it scrolls on its own. */
+.pl-wrap{max-height:46vh;overflow:auto;border:1px solid var(--line);border-radius:9px}
+table.pl-tbl{width:100%;border-collapse:collapse}
+table.pl-tbl th{position:sticky;top:0;z-index:1;background:var(--panel-2);font-size:9.5px;text-transform:uppercase;
+  letter-spacing:.5px;color:var(--txt-3);text-align:left;padding:7px 9px;border-bottom:1px solid var(--line)}
+table.pl-tbl th.num,table.pl-tbl td.num{text-align:right}
+table.pl-tbl td{padding:6px 9px;border-bottom:1px solid var(--line-soft);font-size:12px;vertical-align:top}
+table.pl-tbl tr.pl-need td{background:var(--amber-bg)}
+.pl-sel{width:100%;padding:5px 8px;border-radius:7px;border:1px solid var(--line);background:var(--bg-2);color:var(--txt);font-size:12px}
+.pl-qty{width:72px;padding:5px 7px;border-radius:7px;border:1px solid var(--line);background:var(--bg-2);color:var(--txt);text-align:right;font-size:12px}
+.pl-auto{font-size:9.5px;font-weight:700;letter-spacing:.4px;color:var(--green);margin-left:4px}
+.pl-pick{display:block;font-size:10.5px;color:var(--amber);margin-top:3px}
+.pl-col{display:inline-block;font-size:9.5px;font-weight:700;letter-spacing:.3px;margin-left:5px;
+  padding:1px 5px;border-radius:4px;background:var(--accent-soft);color:var(--accent);vertical-align:1px}
+.pl-more{display:inline-block;font-size:10.5px;color:var(--txt-3);margin-top:3px;text-decoration:underline}
+table.pl-tbl tr.pl-cont td:first-child{padding-left:18px}
+table.pl-tbl tr.pl-cont td{border-top:none}
+.pl-split-note{font-size:10.5px;color:var(--txt-3);margin-top:3px}
+.pl-split-note.bad{color:var(--amber);font-weight:600}
+.pl-more:hover{color:var(--accent)}
 /* Payment schedule: the total is the handle for the breakdown, so it has to look like one. */
 .pay-note{font-size:12px;color:var(--txt-2);background:var(--bg-2);border:1px solid var(--line);
   border-radius:var(--radius-s);padding:9px 11px;margin-top:4px}
@@ -996,6 +1016,14 @@ function containerFactory(c){
   const o=order(first.orderId); return o?(o.factory||''):'';
 }
 function expDelivOf(c){
+  /* Once a container has landed, the day it landed IS its delivery date — there is
+     nothing left to estimate, and keeping the old guess would leave delivered
+     containers ordered by what was once expected rather than by what happened.
+     A container marked delivered before a date was captured keeps the estimate so
+     nothing goes blank; the Payment schedule is where those get chased.
+     Stock overview works out its own estimate, because it shows expected and actual
+     side by side and needs both. */
+  if(c.status==='Delivered' && c.deliveredAt) return new Date(c.deliveredAt+'T00:00:00');
   if(!c.eta) return null;
   const d=new Date(c.eta+'T00:00:00'); d.setDate(d.getDate()+ETA_BUFFER_DAYS);
   return d;
@@ -1733,8 +1761,8 @@ const CG_COLS=[
   {k:'etd', t:'ETD', w:88, cls:'mono', filter:true, print:true, cell:c=>fmtDateShort(c.etd)},
   {k:'eta', t:'ETA', w:88, cls:'mono', filter:true, print:true, cell:c=>fmtDateShort(c.eta)},
   {k:'expected', t:'Expected', w:96, cls:'mono', print:true,
-   val:c=>c.status==='Delivered'?(c.deliveredAt||''):(containerStats(c).expDeliv||''),
-   cell:c=>fmtDateShort(c.status==='Delivered'? c.deliveredAt : containerStats(c).expDeliv)},
+   val:c=>{ const d=expDelivOf(c); return d? isoOf(d) : ''; },
+   cell:c=>fmtDateShort(expDelivOf(c))},
   {k:'transit', t:'Transit', w:78, cls:'mono num', num:true,
    val:c=>{const t=transitDays(c); return t==null?null:t;},
    cell:c=>{const t=transitDays(c); return t==null?'—':t+'d';}},
@@ -1960,7 +1988,7 @@ function exportContainers(){
   const cs=cgRows();
   if(!cs.length){ toast('No containers to export — check your filters'); return; }
   const H=s=>xcell(s,5);
-  const exp=c=>c.status==='Delivered'? c.deliveredAt : containerStats(c).expDeliv;
+  const exp=c=>expDelivOf(c);
   const stat=c=>c.status==='Delivered'?'Delivered':(c.finalVessel===false?'Vessel TBC':'On water');
 
   /* -- sheet 1: stock by container -- */
@@ -5655,8 +5683,11 @@ function openPackModal(editId, focusOrderId){
         <div class="field"><label>Link</label><input id="c_link" value="${esc(c&&c.link?c.link:'')}" placeholder="e.g. https://example.com/tracking"></div>
         <label style="font-size:12px;font-weight:600;color:var(--txt-2);margin:6px 0 6px;display:block">Stock on this container <span class="req">*</span></label>
         <div id="packLinesBox"></div>
-        <div class="no-print" style="margin-top:10px"><button class="btn" onclick="packAddFromOrder()"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> Add from order</button></div>
+        <div class="no-print" style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap"><button class="btn" onclick="packAddFromOrder()"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> Add from order</button>
+          <button class="btn" onclick="plOpen()" title="Read the container number, load date and stock off a supplier packing list"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg> Import packing list</button>
+          <input type="file" id="plFile" accept=".xlsx,.csv" style="display:none" onchange="plPick(this)"></div>
       </div>
+      <div id="packScreenImport" style="display:none"></div>
       <div id="packScreenPick" style="display:none">
         <div class="field"><label>Order</label><select id="packGroupSel" onchange="packChooseGroup(this.value)" style="width:100%;padding:9px 12px;border-radius:9px;border:1px solid var(--line);background:var(--bg-2);color:var(--txt)"></select>
           <div class="minor" id="packHiddenNote" style="font-size:11.5px;margin-top:5px"></div></div>
@@ -5829,6 +5860,386 @@ function updatePackTotal(){
   const t=packLines.reduce((a,p)=>a+(+p.qty||0),0);
   const el=document.getElementById('packTotal'); if(el) el.textContent=nf(t);
 }
+
+/* ============ PACKING LIST IMPORT ============
+   Reads the factory's packing list and turns it into container contents. Nothing is
+   taken on trust: everything found is shown for checking, and every line has to be
+   pointed at one of your own order lines before it can be added — the packing list
+   knows a code and a quantity, it does not know which PO you are shipping against.
+
+   An .xlsx file is a zip of XML. DecompressionStream does the inflating, so this needs
+   no library and the app stays one file that works offline. */
+
+function plPad(n){ return String(n).padStart(2,'0'); }
+function plColOf(ref){                      // "AB12" -> 27 (0-based column)
+  let n=0; for(const ch of String(ref||'')){ const c=ch.charCodeAt(0);
+    if(c>=65 && c<=90) n=n*26+(c-64); else if(c>=97 && c<=122) n=n*26+(c-96); else break; }
+  return n>0? n-1 : 0;
+}
+async function plUnzip(buf){
+  const dv=new DataView(buf), u8=new Uint8Array(buf), td=new TextDecoder();
+  /* The end-of-central-directory record is at the back, after an optional comment. */
+  let eocd=-1;
+  for(let i=u8.length-22; i>=0 && i>u8.length-66000; i--){ if(dv.getUint32(i,true)===0x06054b50){ eocd=i; break; } }
+  if(eocd<0) throw new Error('This does not look like an .xlsx file.');
+  const count=dv.getUint16(eocd+10,true); let p=dv.getUint32(eocd+16,true);
+  const entries={};
+  for(let i=0;i<count;i++){
+    if(p+46>u8.length || dv.getUint32(p,true)!==0x02014b50) break;
+    const nlen=dv.getUint16(p+28,true), elen=dv.getUint16(p+30,true), clen=dv.getUint16(p+32,true);
+    entries[td.decode(u8.subarray(p+46,p+46+nlen))]={
+      method:dv.getUint16(p+10,true), csize:dv.getUint32(p+20,true), lho:dv.getUint32(p+42,true)};
+    p+=46+nlen+elen+clen;
+  }
+  return {dv,u8,entries};
+}
+async function plEntry(z,name){
+  const e=z.entries[name]; if(!e) return null;
+  const nlen=z.dv.getUint16(e.lho+26,true), elen=z.dv.getUint16(e.lho+28,true);
+  const start=e.lho+30+nlen+elen;
+  const raw=z.u8.subarray(start,start+e.csize);
+  if(e.method===0) return new TextDecoder().decode(raw);
+  if(typeof DecompressionStream!=='function') throw new Error('This browser is too old to read .xlsx files. Save the packing list as CSV and try that.');
+  return await new Response(new Blob([raw]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).text();
+}
+function plText(node){
+  /* Phonetic guides live in <rPh> and are not part of the value. */
+  return [...node.getElementsByTagName('t')]
+    .filter(t=>!(t.parentNode && t.parentNode.nodeName==='rPh'))
+    .map(t=>t.textContent).join('');
+}
+function plSheetRows(xml, shared){
+  const doc=new DOMParser().parseFromString(xml,'application/xml');
+  const rows=[];
+  [...doc.getElementsByTagName('row')].forEach(r=>{
+    const out=[];
+    [...r.getElementsByTagName('c')].forEach(c=>{
+      const col=plColOf(c.getAttribute('r')||''), t=c.getAttribute('t');
+      let v='';
+      if(t==='inlineStr'){ const is=c.getElementsByTagName('is')[0]; v=is?plText(is):''; }
+      else { const vn=c.getElementsByTagName('v')[0], raw=vn?vn.textContent:'';
+             v = t==='s' ? (shared[+raw]||'') : raw; }
+      out[col]=v;
+    });
+    rows.push(out);
+  });
+  return rows;
+}
+async function plReadXlsx(buf){
+  const z=await plUnzip(buf);
+  const shared=(()=>{ const x=z.entries['xl/sharedStrings.xml']; return x? null : []; })();
+  const ssXml=await plEntry(z,'xl/sharedStrings.xml');
+  const ss=ssXml? [...new DOMParser().parseFromString(ssXml,'application/xml').getElementsByTagName('si')].map(plText) : [];
+  /* The first sheet in the workbook, which is not always sheet1.xml. */
+  let target=null;
+  const wb=await plEntry(z,'xl/workbook.xml'), rels=await plEntry(z,'xl/_rels/workbook.xml.rels');
+  if(wb && rels){
+    const sh=new DOMParser().parseFromString(wb,'application/xml').getElementsByTagName('sheet')[0];
+    const rid=sh && (sh.getAttribute('r:id')||sh.getAttribute('id'));
+    if(rid){ [...new DOMParser().parseFromString(rels,'application/xml').getElementsByTagName('Relationship')]
+      .forEach(r=>{ if(r.getAttribute('Id')===rid){ let t=r.getAttribute('Target')||'';
+        target = t.startsWith('/')? t.slice(1) : (t.startsWith('xl/')? t : 'xl/'+t); } }); }
+  }
+  if(!target || !z.entries[target])
+    target = Object.keys(z.entries).filter(k=>/^xl\/worksheets\/.*\.xml$/.test(k)).sort()[0];
+  if(!target) throw new Error('No worksheet found in that file.');
+  return plSheetRows(await plEntry(z,target), ss);
+}
+function plReadCsv(text){
+  const rows=[]; let row=[], cell='', q=false;
+  for(let i=0;i<text.length;i++){ const ch=text[i];
+    if(q){ if(ch==='"'){ if(text[i+1]==='"'){ cell+='"'; i++; } else q=false; } else cell+=ch; }
+    else if(ch==='"') q=true;
+    else if(ch===','){ row.push(cell); cell=''; }
+    else if(ch==='\n'){ row.push(cell); rows.push(row); row=[]; cell=''; }
+    else if(ch!=='\r') cell+=ch;
+  }
+  if(cell!=='' || row.length){ row.push(cell); rows.push(row); }
+  return rows;
+}
+
+/* ---- reading meaning out of the grid ---- */
+function plCode(v){
+  /* Packing lists decorate the code: "40-1208\nNAPA", "5-200（1+6）". The order book
+     holds the bare code, so that is what is matched on. No code, no line — a row that
+     is a total or a remark must not become stock. */
+  const first=String(v==null?'':v).split(/[\r\n]/)[0];
+  const m=first.match(/\d+\s*-\s*\d+[A-Za-z]?/);
+  return m? m[0].replace(/\s+/g,'').toUpperCase() : '';
+}
+function plDate(v){
+  const s=String(v==null?'':v).trim(); if(!s) return null;
+  if(/^\d+(\.\d+)?$/.test(s)){            // an Excel serial
+    const n=+s;
+    if(n>20000 && n<80000){                // 1954-2119; anything else is not a date
+      const d=new Date(Date.UTC(1899,11,30)+Math.round(n)*86400000);
+      return d.getUTCFullYear()+'-'+plPad(d.getUTCMonth()+1)+'-'+plPad(d.getUTCDate());
+    }
+    return null;
+  }
+  let m=s.match(/(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/);
+  if(m) return m[1]+'-'+plPad(m[2])+'-'+plPad(m[3]);
+  /* A written date with no year is not a date. Date() quietly fills one in — "December
+     16" parses as the year 2001 — and a silently wrong year on an ETA is worse than no
+     ETA at all, so anything without four digits of year is refused. */
+  if(!/\b(19|20)\d{2}\b/.test(s)) return null;
+  const cleaned=s.replace(/(\d+)(st|nd|rd|th)/gi,'$1').replace(/[，、]/g,' ').replace(/\s+/g,' ').trim();
+  const d=new Date(cleaned);
+  if(isNaN(d)) return null;
+  const y=d.getFullYear();
+  return (y<2015||y>2100)? null : isoOf(d);
+}
+function plParse(rows){
+  const txt=(r,c)=>String(((rows[r]||[])[c])==null?'':(rows[r]||[])[c]).trim();
+  const find=re=>{ for(let r=0;r<rows.length;r++){ const row=rows[r]||[];
+    for(let c=0;c<row.length;c++){ if(re.test(String(row[c]||''))) return [r,c]; } } return null; };
+  const right=(r,c)=>{ const row=rows[r]||[];
+    for(let i=c+1;i<Math.max(row.length,c+9);i++){ const v=row[i];
+      if(v!=null && String(v).trim()!=='') return String(v).trim(); } return ''; };
+
+  const cn=find(/container\s*(no|number)|cntr\s*no/i);
+  const ld=find(/loading(\s*date)?\b|load\s*date/i);
+  let containerNo = cn? right(cn[0],cn[1]) : '';
+  if(/^(no|number)\.?$/i.test(containerNo)) containerNo='';   // the label ran over two cells
+  const loadDate = ld? plDate(right(ld[0],ld[1])) : null;
+
+  /* The ETA is usually buried in a remarks line rather than given a cell of its own. */
+  let eta=null;
+  for(let r=0;r<rows.length && !eta;r++) for(const v of (rows[r]||[])){
+    /* Stops at a real sentence break only: the full-width comma in "December 16th，2026"
+       is part of the date, not the end of it. */
+    const m=String(v||'').match(/ETA\s*[:：]?\s*([^；;]{4,32})/i);
+    if(m){ eta=plDate(m[1]); if(eta) break; }
+  }
+
+  let hr=-1,cCode=-1,cQty=-1,cDesc=-1;
+  for(let r=0;r<Math.min(rows.length,40);r++){
+    const row=rows[r]||[]; let code=-1,qty=-1,desc=-1;
+    row.forEach((v,i)=>{ const t=String(v||'').toLowerCase().trim();
+      if(code<0 && /^(item\s*(no|code|#)?\.?|code|art(icle)?\s*(no|code)?\.?)$/.test(t)) code=i;
+      if(qty<0  && /qty|quantity|pcs/.test(t)) qty=i;
+      if(desc<0 && /descript|product\s*name|^name$/.test(t)) desc=i; });
+    if(code>=0 && qty>=0){ hr=r; cCode=code; cQty=qty; cDesc=desc; break; }
+  }
+  if(hr<0) return {error:'Could not find the item table — no row has both an item-code column and a quantity column.'};
+
+  const items=[], skipped=[];
+  for(let r=hr+1;r<rows.length;r++){
+    const raw=txt(r,cCode);
+    const qty=Math.round(Number(String(txt(r,cQty)).replace(/[^\d.-]/g,'')))||0;
+    if(!raw){ if(qty>0 && txt(r,cDesc)) skipped.push({row:r+1, why:'no item code', text:txt(r,cDesc)}); continue; }
+    const code=plCode(raw);
+    if(!code){ skipped.push({row:r+1, why:'code not recognised', text:raw}); continue; }
+    if(qty<=0){ skipped.push({row:r+1, why:'no quantity', text:raw}); continue; }
+    items.push({raw:raw.replace(/[\r\n]+/g,' '), code, desc:txt(r,cDesc), qty, orderId:'',
+      gid:'g'+r, total:qty});   /* gid/total survive a split, so the parts can be reconciled */
+  }
+  return {containerNo, loadDate, eta, items, skipped, headerRow:hr+1};
+}
+
+/* ---- matching to your order lines ---- */
+function plCandidates(code){
+  return (state.orders||[])
+    .filter(o=>String(o.code||'').trim().toUpperCase()===code)
+    .map(o=>({o, left:orderStats(o).inProduction}))
+    .sort((a,b)=> b.left-a.left
+      || String(a.o.periodISO||'').localeCompare(String(b.o.periodISO||''))
+      || String(a.o.profile||'').localeCompare(String(b.o.profile||'')));
+}
+/* The colour is on the packing list — under the code ("40-1208 / NAPA"), or in the
+   description. Rather than guess which word is a colour, test it the other way round:
+   does this order's own profile name appear in the line's text? That can only ever
+   match a colour you actually order, so there are no invented ones. */
+function plEsc(x){ return String(x).replace(/[.*+?^${}()|[\]\\]/g,'\\$&'); }
+function plColourMatch(it, cands){
+  const hay=(String(it.raw||'')+' '+String(it.desc||'')).toUpperCase();
+  let hits=cands.filter(x=>{
+    const pr=String(x.o.profile||'').trim().toUpperCase();
+    return pr && new RegExp('(^|[^A-Z0-9])'+plEsc(pr)+'([^A-Z0-9]|$)').test(hay);
+  });
+  /* "Off White" and "White" both appear in "OFF WHITE"; the longer name is the real one. */
+  if(hits.length>1){
+    const longest=Math.max(...hits.map(x=>String(x.o.profile||'').length));
+    const best=hits.filter(x=>String(x.o.profile||'').length===longest);
+    const names=new Set(best.map(x=>String(x.o.profile||'').toUpperCase()));
+    if(names.size===1) hits=hits.filter(x=>names.has(String(x.o.profile||'').toUpperCase()));
+  }
+  return hits;
+}
+function plAutoPick(it){
+  const c=plCandidates(it.code);
+  it.cands=c;
+  const byColour=plColourMatch(it,c);
+  /* Narrow to the colour named on the list when it matches something you order; if it
+     matches nothing, fall back to every colour rather than leaving no choice at all. */
+  it.narrow = byColour.length? byColour : null;
+  it.colour = byColour.length? String(byColour[0].o.profile||'') : '';
+  it.showAll = false;
+  const shown=it.narrow||c;
+  /* Only an unambiguous match is filled in: one line of that code, in that colour,
+     with stock still to ship. Anything less is left for you to choose — stock on the
+     wrong PO is worse than a line you had to click. */
+  const open=shown.filter(x=>x.left>0);
+  it.orderId = open.length===1 ? open[0].o.id : '';
+  it.auto = !!it.orderId;
+  it.why = it.orderId ? '' : (!c.length ? 'none' : (open.length>1 ? 'several' : 'shipped'));
+  return it;
+}
+/* One packing-list line can be shipped against more than one PO — 100 pcs made up of
+   50 from September and 50 from December. Splitting keeps both halves tied to the row
+   they came from, so the parts can be checked back against the quantity on the list. */
+function plParts(gid){ return (plData?plData.items:[]).filter(x=>x.gid===gid); }
+function plSplit(i){
+  if(!plData) return;
+  const it=plData.items[i];
+  if(it.qty<2){ toast('Nothing to split — this line is a single unit'); return; }
+  /* If the chosen order cannot take the whole quantity, give it exactly what it has
+     left and pass the remainder on; otherwise halve it. */
+  const chosen=(it.cands||[]).find(x=>x.o.id===it.orderId);
+  const want = chosen && chosen.left>0 ? Math.min(it.qty, chosen.left) : Math.ceil(it.qty/2);
+  const a=Math.max(1, Math.min(it.qty-1, want));
+  const part={...it, qty:it.qty-a, orderId:'', auto:false, showAll:it.showAll};
+  it.qty=a;
+  /* Suggest an order for the new part only when one is left beyond doubt: a single
+     remaining candidate, in the right colour, with stock, that no sibling has taken. */
+  const taken=new Set(plParts(it.gid).map(x=>x.orderId).filter(Boolean));
+  const pool=(part.narrow||part.cands||[]).filter(x=>x.left>0 && !taken.has(x.o.id));
+  if(pool.length===1){ part.orderId=pool[0].o.id; part.auto=true; }
+  plData.items.splice(i+1,0,part);
+  renderPlReview();
+}
+function plToggleAll(i){ if(plData && plData.items[i]){ const it=plData.items[i];
+  it.showAll=!it.showAll;
+  const shown=it.showAll? it.cands : (it.narrow||it.cands);
+  if(it.orderId && !shown.some(x=>x.o.id===it.orderId)) it.orderId='';
+  renderPlReview(); } }
+
+
+/* ---- the review screen ---- */
+let plData=null;
+function plOpen(){
+  const el=document.getElementById('plFile'); if(el){ el.value=''; el.click(); }
+}
+async function plPick(input){
+  const f=input.files && input.files[0]; if(!f) return;
+  toast('Reading '+f.name+'…');
+  try{
+    const rows = /\.csv$/i.test(f.name)
+      ? plReadCsv(await f.text())
+      : await plReadXlsx(await f.arrayBuffer());
+    const d=plParse(rows);
+    if(d.error){ toast(d.error); return; }
+    if(!d.items.length){ toast('No stock lines found in that file'); return; }
+    d.fileName=f.name;
+    d.items.forEach(plAutoPick);
+    plData=d;
+    plShow();
+  }catch(err){
+    console.error('packing list:',err);
+    toast((err&&err.message)||'That file could not be read');
+  }
+}
+function plShow(){
+  document.getElementById('packScreenList').style.display='none';
+  document.getElementById('packFoot').style.display='none';
+  document.getElementById('packScreenPick').style.display='none';
+  document.getElementById('packScreenImport').style.display='block';
+  renderPlReview();
+}
+function plBack(){
+  document.getElementById('packScreenImport').style.display='none';
+  document.getElementById('packScreenList').style.display='block';
+  document.getElementById('packFoot').style.display='flex';
+  renderPackLines();
+}
+function plSet(i,v){ if(plData && plData.items[i]){ plData.items[i].orderId=v; plData.items[i].auto=false; renderPlReview(); } }
+function plSetQty(i,v){ if(plData && plData.items[i]){ plData.items[i].qty=Math.max(0,Math.round(+v||0)); renderPlReview(); } }
+function plDrop(i){ if(plData){ plData.items.splice(i,1); renderPlReview(); } }
+
+function renderPlReview(){
+  const box=document.getElementById('packScreenImport'); if(!box||!plData) return;
+  const d=plData;
+  const ready=d.items.filter(i=>i.orderId).length;
+  const unmatched=d.items.length-ready;
+  box.innerHTML=`
+    <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:10px">
+      <h4 style="margin:0;font-size:14px">Packing list</h4>
+      <span class="minor" style="font-size:12px">${esc(d.fileName||'')}</span>
+    </div>
+    <div class="field row">
+      <div><label>Container number</label><input id="pl_no" class="mono" value="${esc(d.containerNo||'')}" placeholder="not found in the file"></div>
+      <div><label>Load date</label><input type="date" id="pl_load" value="${esc(d.loadDate||'')}"></div>
+    </div>
+    ${d.eta?`<div class="field"><label>ETA found in the remarks</label>
+      <input type="date" id="pl_eta" value="${esc(d.eta)}">
+      <div class="minor" style="font-size:11px;margin-top:3px">Read out of a sentence rather than its own cell, so check it before using it. Clear the box to leave the ETA alone.</div></div>`:''}
+    <div class="minor" style="font-size:12px;margin:12px 0 6px">
+      Each line needs an order to ship against. ${ready?`<b>${nf(ready)}</b> matched automatically`:''}${ready&&unmatched?' · ':''}${unmatched?`<b style="color:var(--amber)">${nf(unmatched)}</b> need${unmatched===1?'s':''} a choice`:''}.
+    </div>
+    <div class="pl-wrap"><table class="pl-tbl">
+      <thead><tr><th style="min-width:150px">Packing list</th><th class="num" style="min-width:70px">Qty</th>
+        <th style="min-width:280px">Ship against</th><th style="width:54px"></th></tr></thead>
+      <tbody>${d.items.map((it,i)=>{
+        const all=it.cands||[];
+        const cands=(it.showAll? all : (it.narrow||all));
+        const hidden=all.length-cands.length;
+        const parts=d.items.filter(x=>x.gid===it.gid);
+        const first=parts[0]===it, split=parts.length>1;
+        const sum=parts.reduce((a,x)=>a+(+x.qty||0),0);
+        const off=split? sum-it.total : 0;
+        return `<tr class="${it.orderId?'':'pl-need'}${split&&!first?' pl-cont':''}">
+          <td>${first
+            ? `<div class="mono" style="font-weight:600">${esc(it.raw)}${
+                it.colour?`<span class="pl-col" title="Colour read off the packing list">${esc(it.colour)}</span>`:''}</div>
+               <div class="minor" style="font-size:11px">${esc(it.desc||'')}</div>
+               ${split?`<div class="pl-split-note ${off?'bad':''}">${nf(parts.length)} parts of ${nf(it.total)}${
+                 off? ' — '+(off>0?'+':'')+nf(off)+' against the list' : ''}</div>`:''}`
+            : `<div class="minor" style="font-size:11.5px">↳ same line</div>`}</td>
+          <td class="num"><input type="number" class="pl-qty mono" value="${it.qty}" min="0" onchange="plSetQty(${i},this.value)"></td>
+          <td>${cands.length
+            ? `<select class="pl-sel" onchange="plSet(${i},this.value)">
+                 <option value="">— choose an order —</option>
+                 ${cands.map(x=>`<option value="${x.o.id}" ${it.orderId===x.o.id?'selected':''}>${
+                     esc((x.o.po||'No PO')+' · '+(x.o.period||'')+' · '+(x.o.profile||'—'))} — ${
+                     x.left>0? nf(x.left)+' still to ship' : 'fully shipped'}</option>`).join('')}
+               </select>${it.auto?`<span class="pl-auto">matched${it.colour?' on '+esc(it.colour):''}</span>`
+                 : it.orderId? ''   /* chosen by hand — the prompt to choose has been answered */
+                 : it.why==='several'? `<span class="pl-pick">${nf(cands.filter(x=>x.left>0).length)} orders match — pick one</span>`
+                 : it.why==='shipped'? '<span class="pl-pick">already fully shipped — pick one to over-ship</span>' : ''}
+               ${hidden>0?`<a href="#" class="pl-more" onclick="plToggleAll(${i});return false;">show ${nf(hidden)} other colour${hidden===1?'':'s'}</a>`:''}
+               ${it.showAll&&it.narrow?`<a href="#" class="pl-more" onclick="plToggleAll(${i});return false;">back to ${esc(it.colour)} only</a>`:''}`
+            : `<span class="minor">No order found for <b>${esc(it.code)}</b> — add the order first, or drop this line</span>`}</td>
+          <td style="white-space:nowrap">${it.qty>1?`<button class="x" title="Split across two orders" onclick="plSplit(${i})">⑂</button>`:''}<button class="x" title="Leave this line out" onclick="plDrop(${i})">×</button></td>
+        </tr>`;}).join('')}
+      </tbody></table></div>
+    ${d.skipped.length?`<div class="minor" style="font-size:11.5px;margin-top:8px">
+      Ignored ${nf(d.skipped.length)} row${d.skipped.length===1?'':'s'}: ${
+      esc(d.skipped.slice(0,4).map(x=>'row '+x.row+' ('+x.why+')').join(', '))}${d.skipped.length>4?'…':''}</div>`:''}
+    <div style="display:flex;gap:10px;margin-top:14px;justify-content:flex-end;align-items:center">
+      <span class="minor" style="margin-right:auto;font-size:12.5px">${nf(d.items.reduce((a,i)=>a+(i.orderId?i.qty:0),0))} units ready to add</span>
+      <button class="btn" onclick="plBack()">Cancel</button>
+      <button class="btn primary" ${ready?'':'disabled'} onclick="plApply()">Add ${nf(ready)} line${ready===1?'':'s'}</button>
+    </div>`;
+}
+function plApply(){
+  if(!plData) return;
+  const no=val('pl_no').trim(), load=val('pl_load'), eta=document.getElementById('pl_eta')?val('pl_eta'):'';
+  const set=(id,v)=>{ const el=document.getElementById(id); if(el && v) el.value=v; };
+  set('c_no',no); set('c_load',load); set('c_eta',eta);
+  /* Merge rather than replace: a packing list may be added on top of stock already
+     picked by hand, and the same code can appear twice on one list. */
+  let added=0, units=0;
+  plData.items.forEach(it=>{
+    if(!it.orderId || !(it.qty>0)) return;
+    const ex=packLines.find(l=>l.orderId===it.orderId);
+    if(ex) ex.qty=(+ex.qty||0)+it.qty; else packLines.push({orderId:it.orderId, qty:it.qty});
+    added++; units+=it.qty;
+  });
+  plData=null;
+  plBack();
+  toast(added+' line'+(added===1?'':'s')+' added · '+nf(units)+' units');
+}
+
 function savePack(id){
   try{ savePackInner(id); }
   catch(err){
